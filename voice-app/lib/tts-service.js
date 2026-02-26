@@ -63,7 +63,7 @@ function generateSpeechMoss(text, referenceAudio) {
     });
 
     const env = { ...process.env, MOSS_TTS_URL };
-    execFile('python3', args, { timeout: 60000, env }, (error, stdout, stderr) => {
+    execFile('python3', args, { timeout: 30000, env }, (error, stdout, stderr) => {
       if (error) {
         const msg = stderr?.trim() || error.message;
         return reject(new Error(`MOSS TTS failed: ${msg}`));
