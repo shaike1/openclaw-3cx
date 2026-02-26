@@ -14,10 +14,14 @@ const logger = require('./logger');
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
+const MOSS_TTS_URL = process.env.MOSS_TTS_URL;
 
 // OpenAI TTS voice (used when voiceId is an ElevenLabs ID or unrecognized)
 const OPENAI_TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
 const OPENAI_TTS_MODEL = 'tts-1';
+
+// Path to the MOSS TTS Python client script
+const MOSS_TTS_SCRIPT = path.join(__dirname, 'moss-tts.py');
 
 // Audio output directory (set via setAudioDir)
 let audioDir = path.join(__dirname, '../audio-temp');
@@ -34,6 +38,45 @@ function generateFilename(text) {
   const hash = crypto.createHash('md5').update(text).digest('hex').substring(0, 8);
   const timestamp = Date.now();
   return `tts-${timestamp}-${hash}.mp3`;
+}
+
+/**
+ * Generate speech using MOSS TTS (GPU-accelerated voice cloning via Gradio)
+ * @param {string} text - Text to synthesize
+ * @param {string} [referenceAudio] - Optional path or URL for voice cloning
+ */
+function generateSpeechMoss(text, referenceAudio) {
+  return new Promise((resolve, reject) => {
+    if (!MOSS_TTS_URL) return reject(new Error('MOSS_TTS_URL not configured'));
+
+    const hash = require('crypto').createHash('md5').update(text).digest('hex').substring(0, 8);
+    const filename = `tts-${Date.now()}-${hash}.wav`;
+    const filepath = path.join(audioDir, filename);
+
+    const args = [MOSS_TTS_SCRIPT, text, filepath];
+    if (referenceAudio) args.push(referenceAudio);
+
+    logger.info('Generating speech with MOSS TTS', {
+      textLength: text.length,
+      hasRef: !!referenceAudio,
+      url: MOSS_TTS_URL
+    });
+
+    const env = { ...process.env, MOSS_TTS_URL };
+    execFile('python3', args, { timeout: 60000, env }, (error, stdout, stderr) => {
+      if (error) {
+        const msg = stderr?.trim() || error.message;
+        return reject(new Error(`MOSS TTS failed: ${msg}`));
+      }
+      const out = stdout.trim();
+      if (!out.startsWith('OK:') || !fs.existsSync(filepath)) {
+        return reject(new Error(`MOSS TTS error: ${out || stderr}`));
+      }
+      const fileSize = fs.statSync(filepath).size;
+      logger.info('MOSS TTS successful', { filename, fileSize });
+      resolve(`http://127.0.0.1:3000/audio-files/${filename}`);
+    });
+  });
 }
 
 /**
@@ -140,15 +183,30 @@ async function generateSpeechElevenLabs(text, voiceId) {
 }
 
 /**
- * Convert text to speech - tries OpenAI first, falls back to ElevenLabs
+ * Convert text to speech
+ * Chain: MOSS TTS (GPU) → gTTS (free) → OpenAI TTS → ElevenLabs
+ *
  * @param {string} text - Text to convert
- * @param {string} voiceId - ElevenLabs voice ID (used only if ElevenLabs is chosen)
+ * @param {string} voiceId - ElevenLabs voice ID (fallback only)
+ * @param {string} [language] - BCP-47 language code (used by gTTS)
+ * @param {string} [referenceAudio] - Path or URL for MOSS TTS voice cloning
  * @returns {Promise<string>} HTTP URL to audio file
  */
-async function generateSpeech(text, voiceId, language) {
+async function generateSpeech(text, voiceId, language, referenceAudio) {
   const startTime = Date.now();
 
-  // Try gTTS first (free, no API key needed)
+  // Primary: MOSS TTS (GPU-accelerated, best quality)
+  if (MOSS_TTS_URL) {
+    try {
+      const url = await generateSpeechMoss(text, referenceAudio);
+      logger.info('Speech generated via MOSS TTS', { latency: Date.now() - startTime });
+      return url;
+    } catch (error) {
+      logger.warn('MOSS TTS failed, falling back to gTTS', { error: error.message });
+    }
+  }
+
+  // Fallback 1: gTTS (free, no API key)
   try {
     const url = await generateSpeechGTTS(text, language);
     logger.info('Speech generated via gTTS', { latency: Date.now() - startTime });
@@ -157,7 +215,7 @@ async function generateSpeech(text, voiceId, language) {
     logger.warn('gTTS failed, trying OpenAI TTS', { error: error.message });
   }
 
-  // Fallback: OpenAI TTS
+  // Fallback 2: OpenAI TTS
   if (OPENAI_API_KEY) {
     try {
       const url = await generateSpeechOpenAI(text);
@@ -168,7 +226,7 @@ async function generateSpeech(text, voiceId, language) {
     }
   }
 
-  // Fallback: ElevenLabs
+  // Fallback 3: ElevenLabs
   if (ELEVENLABS_API_KEY && voiceId) {
     try {
       const url = await generateSpeechElevenLabs(text, voiceId);
