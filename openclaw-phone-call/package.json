@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/phone-call",
+  "version": "2026.2.1",
+  "description": "OpenClaw phone call plugin — make outbound voice calls via the claude-phone voice server",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

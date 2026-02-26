@@ -1,0 +1,28 @@
+{
+  "id": "phone-call",
+  "name": "Phone Call",
+  "description": "Make outbound voice calls via the claude-phone voice server. Supports announce (one-way TTS message) and conversation (two-way AI voice conversation) modes.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "voiceServerUrl": {
+        "type": "string",
+        "description": "Base URL of the claude-phone voice server (e.g. http://YOUR_SERVER_LAN_IP:3000)"
+      },
+      "defaultDevice": {
+        "type": "string",
+        "description": "Default device extension to use for calls (e.g. '12611')"
+      },
+      "defaultMode": {
+        "type": "string",
+        "enum": ["announce", "conversation"],
+        "description": "Default call mode if not specified in the tool call"
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "description": "Ring timeout in seconds (default: 30)"
+      }
+    }
+  }
+}
