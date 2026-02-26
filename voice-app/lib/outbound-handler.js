@@ -64,8 +64,12 @@ async function initiateOutboundCall(srf, mediaServer, options) {
     // SIP Authentication for 3CX extension registration
     const sipAuthUsername = process.env.SIP_AUTH_USERNAME;
     const sipAuthPassword = process.env.SIP_AUTH_PASSWORD;
+    const outboundProxy = process.env.SIP_OUTBOUND_PROXY || 'sip:127.0.0.1:5060;transport=udp';
 
-    const sipUri = 'sip:' + phoneNumber + '@' + sipTrunkHost + ':5060;transport=udp';
+    // For 3CX: use the SIP domain (not the local SBC IP) in the Request-URI
+    // The outbound proxy (SBC at 127.0.0.1:5060) handles actual routing
+    const sipDomain = process.env.SIP_DOMAIN || sipTrunkHost;
+    const sipUri = 'sip:' + phoneNumber + '@' + sipDomain + ';transport=udp';
 
     logger.info('Dialing SIP URI', {
       callId,
@@ -113,8 +117,6 @@ async function initiateOutboundCall(srf, mediaServer, options) {
     let callAnswered = false;
 
     // Create the outbound call (returns dialog directly, not { uas, uac })
-    const outboundProxy = process.env.SIP_OUTBOUND_PROXY || 'sip:127.0.0.1:5060;transport=udp';
-
     const uac = await srf.createUAC(sipUri, uacOptions, {
       cbRequest: function(err, req) {
         // Called when INVITE is sent
@@ -218,16 +220,18 @@ async function initiateOutboundCall(srf, mediaServer, options) {
 async function playMessage(endpoint, message, options) {
   options = options || {};
   var voiceId = options.voiceId || null;
+  var language = options.language || 'en';
   var startTime = Date.now();
 
   try {
     logger.info('Generating TTS for outbound call', {
       textLength: message.length,
-      voiceId: voiceId || 'default'
+      voiceId: voiceId || 'default',
+      language: language
     });
 
-    // Generate TTS audio file with optional device voice
-    var audioUrl = await ttsService.generateSpeech(message, voiceId);
+    // Generate TTS audio file with optional device voice and language
+    var audioUrl = await ttsService.generateSpeech(message, voiceId, language);
 
     logger.info('Playing TTS to caller', { audioUrl: audioUrl });
 

@@ -137,9 +137,11 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
     maxTurns = 20
   } = options;
 
-  // Extract devicePrompt and voiceId from deviceConfig (for Cephanie etc)
+  // Extract devicePrompt, voiceId, language and thinkingPhrase from deviceConfig
   const devicePrompt = deviceConfig?.prompt || null;
-  const voiceId = deviceConfig?.voiceId || null;  // null = use default Morpheus voice
+  const voiceId = deviceConfig?.voiceId || null;
+  const language = deviceConfig?.language || 'en';
+  const deviceThinkingPhrase = deviceConfig?.thinkingPhrase || null;
   let session = null;
   let forkRunning = false;
   let callActive = true;
@@ -165,7 +167,8 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
     if (!skipGreeting && callActive) {
       const greetingUrl = await ttsService.generateSpeech(
         "Hello! I'm your server. How can I help you today?",
-        voiceId
+        voiceId,
+        language
       );
       await endpoint.play(greetingUrl);
     }
@@ -291,7 +294,8 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
       if (!utterance) {
         const promptUrl = await ttsService.generateSpeech(
           "I didn't hear anything. Are you still there?",
-          voiceId
+          voiceId,
+          language
         );
         if (callActive) await endpoint.play(promptUrl);
         continue;
@@ -310,7 +314,8 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
       // Transcribe
       const transcript = await whisperClient.transcribe(utterance.audio, {
         format: 'pcm',
-        sampleRate: 16000
+        sampleRate: 16000,
+        language
       });
 
       logger.info('Transcribed', { callUuid, transcript });
@@ -319,7 +324,8 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
       if (!transcript || transcript.trim().length < 2) {
         const clarifyUrl = await ttsService.generateSpeech(
           "Sorry, I didn't catch that. Could you repeat?",
-          voiceId
+          voiceId,
+          language
         );
         if (callActive) await endpoint.play(clarifyUrl);
         continue;
@@ -327,7 +333,7 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
 
       // Handle goodbye
       if (isGoodbye(transcript)) {
-        const byeUrl = await ttsService.generateSpeech("Goodbye! Call again anytime.", voiceId);
+        const byeUrl = await ttsService.generateSpeech("Goodbye! Call again anytime.", voiceId, language);
         if (callActive) await endpoint.play(byeUrl);
         break;
       }
@@ -339,10 +345,10 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
       // Check if call still active before thinking feedback
       if (!callActive) break;
 
-      // 1. Play random thinking phrase
-      const thinkingPhrase = getRandomThinkingPhrase();
+      // 1. Play thinking phrase (use device-specific phrase if set, otherwise random)
+      const thinkingPhrase = deviceThinkingPhrase || getRandomThinkingPhrase();
       logger.info('Playing thinking phrase', { callUuid, phrase: thinkingPhrase });
-      const thinkingUrl = await ttsService.generateSpeech(thinkingPhrase, voiceId);
+      const thinkingUrl = await ttsService.generateSpeech(thinkingPhrase, voiceId, language);
       if (callActive) await endpoint.play(thinkingUrl);
 
       // 2. Start hold music in background
@@ -382,7 +388,7 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
       const voiceLine = extractVoiceLine(claudeResponse);
       logger.info('Voice line', { callUuid, voiceLine });
 
-      const responseUrl = await ttsService.generateSpeech(voiceLine, voiceId);
+      const responseUrl = await ttsService.generateSpeech(voiceLine, voiceId, language);
       if (callActive) await endpoint.play(responseUrl);
 
       logger.info('Turn complete', { callUuid, turn: turnCount });
@@ -392,7 +398,8 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
     if (turnCount >= maxTurns && callActive) {
       const maxUrl = await ttsService.generateSpeech(
         "We've been talking for a while. Goodbye!",
-        voiceId
+        voiceId,
+        language
       );
       await endpoint.play(maxUrl);
     }
@@ -409,7 +416,7 @@ async function runConversationLoop(endpoint, dialog, callUuid, options) {
     try {
       if (session) session.setCaptureEnabled(false);
       if (callActive) {
-        const errUrl = await ttsService.generateSpeech("Sorry, something went wrong.", voiceId);
+        const errUrl = await ttsService.generateSpeech("Sorry, something went wrong.", voiceId, language);
         await endpoint.play(errUrl);
       }
     } catch (e) {

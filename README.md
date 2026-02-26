@@ -2,231 +2,321 @@
   <img src="assets/logo.png" alt="Claude Phone" width="200">
 </p>
 
-# Claude Phone
+# claude-phone × OpenClaw
 
-Voice interface for Claude Code via SIP/3CX. Call your AI, and your AI can call you.
+A voice interface for [OpenClaw](https://github.com/openclaw/openclaw) via SIP/3CX. Give your AI a phone number — call it, and it can call you back.
 
-## What is this?
+---
 
-Claude Phone gives your Claude Code installation a phone number. You can:
+## Architecture
 
-- **Inbound**: Call an extension and talk to Claude - run commands, check status, ask questions
-- **Outbound**: Your server can call YOU with alerts, then have a conversation about what to do
+```
+Phone (3CX app / desk phone)
+        │
+        ▼
+3CX Cloud (YOUR_COMPANY.3cx.cloud)
+        │  SIP trunk
+        ▼
+3CX SmartSBC  ← Docker container, listens on port 5060
+        │  SIP INVITE
+        ▼
+drachtio  ← Docker, port 5070
+        │
+        ▼
+voice-app  ← Docker, port 3000 / 3001
+   ├── gTTS (Google Translate TTS — free, no key)
+   ├── Google Web Speech API (STT — free, no key)
+   └── claude-api-server (port 3333, host process)
+              │
+              ▼
+        OpenClaw AI  (separate server, e.g. YOUR_OPENCLAW_IP:18790)
+        │
+        ▼
+FreeSWITCH  ← Docker, port 5080 — media/RTP
+```
+
+All TTS and STT is free — no ElevenLabs, OpenAI, or Whisper API keys required.
+
+---
 
 ## Prerequisites
 
-| Requirement | Where to Get It | Notes |
-|-------------|-----------------|-------|
-| **3CX Cloud Account** | [3cx.com](https://www.3cx.com/) | Free tier works |
-| **ElevenLabs API Key** | [elevenlabs.io](https://elevenlabs.io/) | For text-to-speech |
-| **OpenAI API Key** | [platform.openai.com](https://platform.openai.com/) | For Whisper speech-to-text |
-| **Claude Code CLI** | [claude.ai/code](https://claude.ai/code) | Requires Claude Max subscription |
+| Requirement | Notes |
+|-------------|-------|
+| **3CX Cloud Account** | Free tier works — [3cx.com](https://www.3cx.com/) |
+| **Linux server** (LAN-accessible) | Runs Docker + 3CX SBC service |
+| **OpenClaw** running on the network | The AI backend |
+| **Docker + Docker Compose** | For drachtio, FreeSWITCH, voice-app, SBC |
+| **Python 3** with pip | For gTTS and SpeechRecognition (installed in Docker image) |
 
-## Platform Support
+No paid API keys are needed for voice. Optional: OpenAI or ElevenLabs keys for higher-quality TTS/STT fallback.
 
-| Platform | Status |
-|----------|--------|
-| **macOS** | Fully supported |
-| **Linux** | Fully supported (including Raspberry Pi) |
-| **Windows** | Not supported (may work with WSL) |
+---
 
 ## Quick Start
 
-### 1. Install
+### 1. Clone and configure
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/shaike1/openclaw-3cx/main/install.sh | bash
+git clone git@github.com:shaike1/openclaw-3cx.git
+cd openclaw-3cx
 ```
 
-The installer will:
-- Check for Node.js 18+, Docker, and git (offers to install if missing)
-- Clone the repository to `~/.claude-phone-cli`
-- Install dependencies
-- Create the `claude-phone` command
-
-### 2. Setup
+Create `.env` (see [Environment Reference](#environment-reference) below):
 
 ```bash
-claude-phone setup
+cp .env.example .env   # then edit
 ```
 
-The setup wizard asks what you're installing:
-
-| Type | Use Case | What It Configures |
-|------|----------|-------------------|
-| **Voice Server** | Pi or dedicated voice box | Docker containers, connects to remote API server |
-| **API Server** | Mac/Linux with Claude Code | Just the Claude API wrapper |
-| **Both** | All-in-one single machine | Everything on one box |
-
-### 3. Start
+Create `voice-app/config/devices.json` (see [Device Config](#device-config)):
 
 ```bash
-claude-phone start
+cp voice-app/config/devices.json.example voice-app/config/devices.json   # then edit
 ```
 
-## Deployment Modes
-
-### All-in-One (Single Machine)
-
-Best for: Mac or Linux server that's always on and has Claude Code installed.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Your Phone                                                  │
-│      │                                                       │
-│      ↓ Call extension 9000                                  │
-│  ┌─────────────┐                                            │
-│  │     3CX     │  ← Cloud PBX                               │
-│  └──────┬──────┘                                            │
-│         │                                                    │
-│         ↓                                                    │
-│  ┌─────────────────────────────────────────────┐           │
-│  │     Single Server (Mac/Linux)                │           │
-│  │  ┌───────────┐    ┌───────────────────┐    │           │
-│  │  │ voice-app │ ←→ │ claude-api-server │    │           │
-│  │  │ (Docker)  │    │ (Claude Code CLI) │    │           │
-│  │  └───────────┘    └───────────────────┘    │           │
-│  └─────────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Setup:**
-```bash
-claude-phone setup    # Select "Both"
-claude-phone start    # Launches Docker + API server
-```
-
-### Split Mode (Pi + API Server)
-
-Best for: Dedicated Pi for voice services, Claude running on your main machine.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Your Phone                                                  │
-│      │                                                       │
-│      ↓ Call extension 9000                                  │
-│  ┌─────────────┐                                            │
-│  │     3CX     │  ← Cloud PBX                               │
-│  └──────┬──────┘                                            │
-│         │                                                    │
-│         ↓                                                    │
-│  ┌─────────────┐         ┌─────────────────────┐           │
-│  │ Raspberry Pi │   ←→   │ Mac/Linux with      │           │
-│  │ (voice-app)  │  HTTP  │ Claude Code CLI     │           │
-│  └─────────────┘         │ (claude-api-server) │           │
-│                          └─────────────────────┘           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**On your Pi (Voice Server):**
-```bash
-claude-phone setup    # Select "Voice Server", enter API server IP when prompted
-claude-phone start    # Launches Docker containers
-```
-
-**On your Mac/Linux (API Server):**
-```bash
-claude-phone api-server    # Starts Claude API wrapper on port 3333
-```
-
-Note: On the API server machine, you don't need to run `claude-phone setup` first - the `api-server` command works standalone.
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `claude-phone setup` | Interactive configuration wizard |
-| `claude-phone start` | Start services based on installation type |
-| `claude-phone stop` | Stop all services |
-| `claude-phone status` | Show service status |
-| `claude-phone doctor` | Health check for dependencies and services |
-| `claude-phone api-server [--port N]` | Start API server standalone (default: 3333) |
-| `claude-phone device add` | Add a new device/extension |
-| `claude-phone device list` | List configured devices |
-| `claude-phone device remove <name>` | Remove a device |
-| `claude-phone logs [service]` | Tail logs (voice-app, drachtio, freeswitch) |
-| `claude-phone config show` | Display configuration (secrets redacted) |
-| `claude-phone config path` | Show config file location |
-| `claude-phone config reset` | Reset configuration |
-| `claude-phone backup` | Create configuration backup |
-| `claude-phone restore` | Restore from backup |
-| `claude-phone update` | Update Claude Phone |
-| `claude-phone uninstall` | Complete removal |
-
-## Device Personalities
-
-Each SIP extension can have its own identity with a unique name, voice, and personality prompt:
+### 2. Start the claude-api-server (host process)
 
 ```bash
-claude-phone device add
+cd claude-api-server
+npm install
+node server.js &
 ```
 
-Example devices:
-- **Morpheus** (ext 9000) - General assistant
-- **Cephanie** (ext 9002) - Storage monitoring bot
+This bridges voice-app → OpenClaw at `POST /conversation/process`.
 
-## API Endpoints
+### 3. Start Docker services
 
-The voice-app exposes these endpoints on port 3000:
+```bash
+docker compose build voice-app   # first time, or after code changes
+docker compose up -d
+```
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| POST | `/api/outbound-call` | Initiate an outbound call |
-| GET | `/api/call/:callId` | Get call status |
-| GET | `/api/calls` | List active calls |
-| POST | `/api/query` | Query a device programmatically |
-| GET | `/api/devices` | List configured devices |
+### 4. Test a call
 
-See [Outbound API Reference](voice-app/README-OUTBOUND.md) for details.
+Dial the configured extension from any 3CX phone. You should hear the greeting in the device's configured language.
+
+---
+
+## Device Config
+
+`voice-app/config/devices.json` is **volume-mounted and gitignored** (it contains SIP credentials).
+
+Format — an **object keyed by extension** (not an array):
+
+```json
+{
+  "12611": {
+    "name": VoiceBot,
+    "extension": "12611",
+    "authId": "YOUR_SIP_AUTH_ID",
+    "password": "YOUR_SIP_PASSWORD",
+    "language": "he",
+    "greeting": "שלום! איך אוכל לעזור?",
+    "thinkingPhrase": "רגע אחד...",
+    "prompt": "You are VoiceBot, a helpful AI assistant. Always respond in Hebrew. Keep responses under 40 words.",
+    "voiceId": "YOUR_ELEVENLABS_VOICE_ID"
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `extension` | 3CX extension number |
+| `authId` | SIP Auth ID from 3CX Phone Config tab (NOT the extension number) |
+| `password` | SIP password from 3CX Phone Config tab |
+| `language` | BCP-47 language code (`he`, `en`, `ar`, etc.) |
+| `greeting` | Spoken when a call connects |
+| `thinkingPhrase` | Spoken while waiting for AI response (e.g. "רגע אחד...") |
+| `prompt` | System prompt sent to OpenClaw with every message |
+| `voiceId` | ElevenLabs voice ID (only used if ElevenLabs is configured as TTS provider) |
+
+---
+
+## Environment Reference
+
+```env
+# Network — use LAN IP (the SBC routes internally)
+EXTERNAL_IP=YOUR_SERVER_LAN_IP
+
+# Drachtio
+DRACHTIO_HOST=127.0.0.1
+DRACHTIO_PORT=9022
+DRACHTIO_SECRET=your_drachtio_secret
+DRACHTIO_SIP_PORT=5070
+
+# FreeSWITCH
+FREESWITCH_HOST=127.0.0.1
+FREESWITCH_PORT=8021
+FREESWITCH_SECRET=JambonzR0ck$
+
+# 3CX SIP — registrar is localhost because SBC handles the tunnel
+SIP_DOMAIN=YOUR_COMPANY.3cx.cloud
+SIP_REGISTRAR=127.0.0.1
+
+# OpenClaw AI bridge
+CLAUDE_API_URL=http://YOUR_OPENCLAW_IP:3333
+
+# App ports
+HTTP_PORT=3000
+WS_PORT=3001
+AUDIO_DIR=/app/audio
+
+# Optional: higher-quality TTS/STT fallbacks
+ELEVENLABS_API_KEY=
+OPENAI_API_KEY=
+```
+
+> **Why `EXTERNAL_IP=LAN_IP`?** The SBC is co-located and routes INVITEs to the LAN interface. Use the LAN IP, not the public IP.
+>
+> **Why `SIP_REGISTRAR=127.0.0.1`?** The SmartSBC listens on `127.0.0.1:5060` and proxies REGISTER to 3CX Cloud via its tunnel.
+
+---
+
+## TTS / STT Stack
+
+### Primary (free, no API keys)
+
+| Component | Technology |
+|-----------|-----------|
+| **TTS** | [gTTS](https://github.com/pndurette/gTTS) — Google Translate TTS via Python |
+| **STT** | [SpeechRecognition](https://github.com/Uberi/speech_recognition) — Google Web Speech API via Python |
+
+Both are installed in the Docker image. Hebrew uses the `iw` language code for gTTS and `iw-IL` for STT (mapped automatically from `"language": "he"` in devices.json).
+
+### Fallback chain (if API keys are set)
+
+TTS: gTTS → OpenAI TTS → ElevenLabs
+STT: Google Web Speech → OpenAI Whisper
+
+---
+
+## Outbound Calling API
+
+The voice-app exposes a REST API on port 3000:
+
+```bash
+# Announce mode — play a message and hang up
+curl -X POST http://localhost:3000/api/outbound-call \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "to": "12610",
+    "device": "12611",
+    "mode": "announce",
+    "message": "שלום, יש לי הודעה חשובה עבורך."
+  }'
+
+# Conversation mode — stay on the line for two-way AI conversation
+curl -X POST http://localhost:3000/api/outbound-call \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "to": "+15551234567",
+    "device": "12611",
+    "mode": "conversation",
+    "message": "שלום! אני הבוט. התקשרתי לברר איך אתה מרגיש."
+  }'
+```
+
+| Field | Description |
+|-------|-------------|
+| `to` | Phone number (E.164 `+15551234567`) or internal extension (`12610`) |
+| `message` | Opening line spoken when the call connects |
+| `device` | Extension or name of the calling device |
+| `mode` | `announce` (play + hangup) or `conversation` (two-way AI conversation) |
+| `context` | Background info for the AI — not spoken aloud |
+| `timeoutSeconds` | Ring timeout (default: 30) |
+
+---
+
+## OpenClaw Phone-Call Skill
+
+The `openclaw/extensions/phone-call` directory contains an OpenClaw plugin that lets the AI make phone calls as a tool:
+
+```
+openclaw/extensions/phone-call/
+├── index.ts                 # Plugin entry point
+├── package.json
+├── openclaw.plugin.json     # Plugin manifest + config schema
+└── src/
+    └── phone-call-tool.ts   # Tool implementation
+```
+
+**Tool: `phone-call`**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `to` | string | Phone number or extension to call |
+| `message` | string | What the device says when the call connects |
+| `mode` | `announce` \| `conversation` | Call mode (default: `conversation`) |
+| `device` | string | Device extension/name (optional, uses plugin default) |
+| `context` | string | Background context for the AI (optional) |
+| `timeoutSeconds` | number | Ring timeout (optional) |
+
+**Plugin config** (in OpenClaw extension settings):
+
+```json
+{
+  "voiceServerUrl": "http://YOUR_SERVER_LAN_IP:3000",
+  "defaultDevice": "12611",
+  "defaultMode": "conversation",
+  "timeoutSeconds": 30
+}
+```
+
+---
+
+## Port Reference
+
+| Port | Service | Note |
+|------|---------|------|
+| 5060 | 3CX SmartSBC | Docker container |
+| 5070 | drachtio | Docker, host network |
+| 5080 | FreeSWITCH SIP | Docker, host network |
+| 5090 | SBC → 3CX tunnel | Outbound only |
+| 8021 | FreeSWITCH ESL | Internal |
+| 9022 | drachtio admin | Internal |
+| 3000 | voice-app HTTP API | |
+| 3001 | voice-app WebSocket | Audio streaming |
+| 3333 | claude-api-server | Host process |
+| 30000–30100 | RTP audio | Avoids 3CX SBC range (20000–20099) |
+
+---
+
+## Full Setup Guide
+
+See [docs/SETUP.md](docs/SETUP.md) for the complete step-by-step guide including:
+
+- 3CX SmartSBC installation
+- 3CX extension configuration
+- Docker setup
+- claude-api-server setup
+- ARM64 / Raspberry Pi notes
+- Troubleshooting
+
+---
 
 ## Troubleshooting
 
-### Quick Diagnostics
+| Problem | Solution |
+|---------|----------|
+| No INVITE reaching drachtio | Check `EXTERNAL_IP` (must be LAN IP), verify SBC tunnel |
+| 403 on REGISTER | Auth ID ≠ extension number — find real Auth ID in 3CX Phone Config tab |
+| No voice on inbound calls | Check `docker logs voice-app` for TTS errors |
+| Outbound call not connecting | Check `SIP_DOMAIN` in .env, verify device credentials in devices.json |
+| AI says "unexpected error" | Check `claude-api-server` is running: `curl http://localhost:3333/health` |
 
 ```bash
-claude-phone doctor    # Automated health checks
-claude-phone status    # Service status
-claude-phone logs      # View logs
+# View logs
+docker logs voice-app -f
+docker logs drachtio -f
+
+# Check registrar
+docker logs voice-app | grep REGISTRAR
+
+# Test TTS manually
+docker exec voice-app python3 -c "from gtts import gTTS; gTTS('שלום', lang='iw').save('/tmp/t.mp3')" && echo "OK"
 ```
 
-### Common Issues
-
-| Problem | Likely Cause | Solution |
-|---------|--------------|----------|
-| Calls connect but no audio | Wrong external IP | Re-run `claude-phone setup`, verify LAN IP |
-| Extension not registering | 3CX SBC not running | Check 3CX admin panel |
-| "Sorry, something went wrong" | API server unreachable | Check `claude-phone status` |
-| Port conflict on startup | 3CX SBC using port 5060 | Setup auto-detects this; re-run setup |
-
-See [Troubleshooting Guide](docs/TROUBLESHOOTING.md) for more.
-
-## Configuration
-
-Configuration is stored in `~/.claude-phone/config.json` with restricted permissions (chmod 600).
-
-```bash
-claude-phone config show    # View config (secrets redacted)
-claude-phone config path    # Show file location
-```
-
-## Development
-
-```bash
-# Run tests
-npm test
-
-# Lint
-npm run lint
-npm run lint:fix
-```
-
-## Documentation
-
-- [CLI Reference](cli/README.md) - Detailed CLI documentation
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
-- [Outbound API](voice-app/README-OUTBOUND.md) - Outbound calling API reference
-- [Deployment](voice-app/DEPLOYMENT.md) - Production deployment guide
-- [Claude Code Skill](docs/CLAUDE-CODE-SKILL.md) - Build a "call me" skill for Claude Code
+---
 
 ## License
 

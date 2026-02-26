@@ -230,9 +230,10 @@ router.post('/outbound-call', async function(req, res) {
         session.setEndpoint(endpoint);
         session.transition('PLAYING');
 
-        // Play the initial message with device voice
+        // Play the initial message with device voice and language
         var voiceId = (deviceConfig && deviceConfig.voiceId) ? deviceConfig.voiceId : null;
-        await playMessage(endpoint, message, { voiceId: voiceId });
+        var language = (deviceConfig && deviceConfig.language) ? deviceConfig.language : 'en';
+        await playMessage(endpoint, message, { voiceId: voiceId, language: language });
 
         if (mode === 'announce') {
           await hangupCall(dialog, endpoint, callId);
