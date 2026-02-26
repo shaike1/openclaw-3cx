@@ -183,26 +183,45 @@ claude-phone start
    claude-phone logs voice-app | grep -i error
    ```
 
-### Whisper transcription errors
+### Speech-to-Text (STT) errors
 
 **Symptom:** Claude responds to wrong words or doesn't understand speech.
 
-**Causes & Solutions:**
+The STT stack tries providers in order: **Google Cloud STT → Google Web Speech (free) → OpenAI Whisper**
 
 | Cause | Solution |
 |-------|----------|
-| OpenAI billing exhausted | Add credits to OpenAI account |
+| Google Cloud key missing | Set `GOOGLE_CLOUD_KEY` in `.env` and recreate container |
+| `FLAC conversion utility not available` | `flac` package missing from Docker image — rebuild |
+| OpenAI billing exhausted | Add credits, or rely on free Google Web Speech fallback |
 | Audio quality poor | Check microphone, reduce background noise |
-| Network latency | Audio chunks may be lost; check connection |
 
-### ElevenLabs TTS errors
+**FLAC fix (if on older image):**
+```bash
+# Add flac to voice-app Dockerfile:
+# apt-get install -y python3 python3-pip flac
+docker compose build voice-app && docker compose up -d voice-app
+```
+
+**Verify Google Cloud key is inside container:**
+```bash
+docker exec voice-app printenv GOOGLE_CLOUD_KEY
+# If empty, do a force-recreate (restart is not enough for env_file changes):
+docker compose up -d --force-recreate voice-app
+```
+
+### TTS errors / no audio response
 
 **Symptom:** Claude's responses aren't spoken, or voice sounds wrong.
 
-**Solutions:**
-1. Check ElevenLabs character quota isn't exhausted
-2. Verify voice ID is valid: `claude-phone device list`
-3. Check API key still works
+The TTS stack tries providers in order: **Google Cloud TTS → MOSS TTS → gTTS → OpenAI TTS → ElevenLabs**
+
+| Cause | Solution |
+|-------|----------|
+| Google Cloud key missing | Set `GOOGLE_CLOUD_KEY` in `.env` and force-recreate container |
+| MOSS TTS too slow (ARM) | Set `MOSS_TTS_URL=` (empty) to skip it — gTTS takes ~500 ms |
+| ElevenLabs quota exhausted | Add credits, or rely on free gTTS fallback |
+| OpenAI billing exhausted | Add credits, or rely on gTTS fallback |
 
 ### Calls disconnect after a few seconds
 
@@ -284,6 +303,58 @@ docker compose logs -f freeswitch
 # If running in foreground, check terminal output
 # If running via start command, check:
 cat ~/.claude-phone/api-server.log
+```
+
+## ARM64 / Cloud VPS Deployment
+
+### No audio on Oracle Cloud (or any cloud NAT)
+
+**Symptom:** Calls connect, bot speaks, but you can't be heard (STT never triggers).
+
+**Root cause:** Cloud instances have a public IP that is **not bound to any network interface** — the
+private IP is what drachtio and FreeSWITCH see. Setting `EXTERNAL_IP` to the public IP causes SDP
+to advertise an unreachable address for RTP.
+
+**Fix:**
+```bash
+# Use the private LAN IP, not the public IP
+EXTERNAL_IP=10.0.0.4   # whatever "ip addr show" reports
+```
+
+### `expectSession TIMEOUT` in logs
+
+**Symptom:** The audio fork WebSocket never connects; each call attempt times out.
+
+**Cause:** TTS generation took too long (e.g. MOSS TTS > 15 s) so FreeSWITCH hung up before the
+conversation loop started.
+
+**Fix:** Disable slow TTS providers for ARM deployments:
+```bash
+MOSS_TTS_URL=   # leave empty — gTTS (~500 ms) is used instead
+```
+
+### Google Cloud env vars not picked up after `.env` update
+
+**Symptom:** `docker exec voice-app printenv GOOGLE_CLOUD_KEY` returns nothing even though the key
+is in `.env`.
+
+**Cause:** `docker compose restart` does **not** re-read `env_file`. A full container recreation is needed.
+
+**Fix:**
+```bash
+docker compose up -d --force-recreate voice-app
+```
+
+### FLAC missing (Google Web Speech STT fails)
+
+**Symptom:** Logs show `FLAC conversion utility not available`.
+
+**Cause:** The `SpeechRecognition` Python library requires the `flac` CLI to convert WAV → FLAC
+before sending audio to Google's free speech endpoint.
+
+**Fix:** Rebuild the voice-app Docker image (flac is already included in the current Dockerfile):
+```bash
+docker compose build voice-app && docker compose up -d voice-app
 ```
 
 ## Still Stuck?

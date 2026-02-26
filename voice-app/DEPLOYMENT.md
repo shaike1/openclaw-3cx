@@ -4,25 +4,49 @@ Guide for deploying Claude Phone in production environments.
 
 ## Architecture Overview
 
-Claude Phone consists of three Docker containers and an optional API server:
+Claude Phone is designed to run entirely on an **ARM64 server** (tested on Oracle Cloud ARM VPS). All
+voice processing containers run on the same host; the AI gateway (OpenClaw) can be co-located or
+reached over a VPN (Tailscale).
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Containers                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │  drachtio   │  │ freeswitch  │  │     voice-app       │ │
-│  │  (SIP)      │  │  (Media)    │  │   (Node.js app)     │ │
-│  │  Port 5060  │  │ RTP 30000+  │  │   Port 3000         │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-              ┌───────────────────────────────┐
-              │     claude-api-server         │
-              │     (Claude Code wrapper)     │
-              │     Port 3333                 │
-              └───────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                  ARM64 Server (Oracle Cloud / any Linux)                  │
+│                                                                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐               │
+│  │  drachtio   │  │ freeswitch  │  │     voice-app       │               │
+│  │  (SIP proxy)│  │  (Media)    │  │   (Node.js app)     │               │
+│  │  Port 5070  │  │ RTP 30000+  │  │   Port 3000 / 3001  │               │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘               │
+│         ▲                │                    │                            │
+│         │                │ ESL 8021           │ WS audio fork             │
+│  ┌─────────────┐         └────────────────────┘                           │
+│  │  3cx-sbc    │  ← SIP TLS tunnel to YOUR_COMPANY.3cx.cloud                      │
+│  │  Port 5060  │                                                           │
+│  └─────────────┘                                                           │
+│                                                                            │
+│  ┌─────────────────────┐                                                   │
+│  │  claude-api-server  │  (host process, port 3333)                        │
+│  │  bridges to OpenClaw│──────────────────────────────► OpenClaw AI        │
+│  └─────────────────────┘                                  (port 18790)     │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Key architectural points
+
+- **drachtio** listens on port **5070** (not 5060, which is used by the 3CX SBC)
+- **3CX SBC** handles all SIP TLS to `*.3cx.cloud`; RTP flows through its media relay (ports 20000–20063)
+- **voice-app** port 3001 is the WebSocket audio fork server that FreeSWITCH connects to per-call
+- **claude-api-server** runs as a host process (not Docker) and bridges to the OpenClaw AI gateway
+- On Oracle Cloud (and other cloud NAT environments) the **public IP is not on any interface** —
+  set `EXTERNAL_IP` to the private LAN IP so drachtio and FreeSWITCH advertise the correct address in SDP
+
+### ARM64 deployment notes
+
+All containers run natively on ARM64. FreeSWITCH and the 3CX SBC previously required QEMU x86
+emulation; they now have native ARM64 images in this stack.
+
+**MOSS TTS** (GPU-accelerated voice cloning) is available on x86 hosts at port 7860 but is too slow
+(>15 s inference) for real-time calls. Leave `MOSS_TTS_URL=` empty on ARM deployments to skip it.
 
 ## Network Requirements
 
@@ -92,12 +116,14 @@ Key environment variables in the generated `.env`:
 
 | Variable | Purpose |
 |----------|---------|
-| `EXTERNAL_IP` | Server LAN IP for RTP routing |
+| `EXTERNAL_IP` | Server LAN IP for RTP routing (use private IP on cloud NAT) |
 | `CLAUDE_API_URL` | URL to claude-api-server |
-| `ELEVENLABS_API_KEY` | TTS API key |
-| `OPENAI_API_KEY` | Whisper STT API key |
+| `GOOGLE_CLOUD_KEY` | Google Cloud API key — enables high-quality Wavenet TTS + accurate STT |
+| `ELEVENLABS_API_KEY` | ElevenLabs TTS API key (fallback) |
+| `OPENAI_API_KEY` | OpenAI Whisper STT + TTS API key (fallback) |
+| `MOSS_TTS_URL` | URL to MOSS GPU TTS server (leave empty on ARM — too slow for real-time) |
 | `SIP_DOMAIN` | 3CX server FQDN |
-| `SIP_REGISTRAR` | SIP registrar address |
+| `SIP_REGISTRAR` | SIP registrar address (use `127.0.0.1` when 3CX SBC is local) |
 
 ## Split Deployment
 
