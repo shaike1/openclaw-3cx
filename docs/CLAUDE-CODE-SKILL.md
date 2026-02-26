@@ -161,7 +161,7 @@ from typing import Optional, Dict, Any
 # ============================================================
 
 API_BASE_URL = "http://YOUR_SERVER:3000"
-DEFAULT_CALLER_ID = "9000"
+DEFAULT_CALLER_ID = "12611"
 TIMEOUT_SECONDS = 30
 
 # Contact Directory - Map names/aliases to phone numbers
@@ -187,7 +187,7 @@ DEVICES = {
     },
 }
 
-DEFAULT_DEVICE = "Morpheus"
+DEFAULT_DEVICE = "VoiceBot"
 
 # ============================================================
 # EXCEPTIONS

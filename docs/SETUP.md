@@ -533,6 +533,23 @@ docker compose up -d --force-recreate voice-app
 
 Auth ID is not the extension number. Get it from the 3CX IP Phone tab.
 
+### 403 on outbound INVITE (call rings fail immediately)
+
+Ensure outbound auth uses the same credentials as the selected device in `devices.json`:
+
+```env
+SIP_AUTH_ID=<device authId>
+SIP_AUTH_USERNAME=<device authId>
+SIP_AUTH_PASSWORD=<device password>
+DEFAULT_CALLER_ID=<device extension>   # e.g. 12611
+```
+
+Then recreate the container:
+
+```bash
+docker compose up -d --force-recreate voice-app
+```
+
 ### AI returns "unexpected error"
 
 ```bash

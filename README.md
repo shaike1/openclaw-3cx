@@ -194,6 +194,10 @@ FREESWITCH_SECRET=JambonzR0ck$
 # ── 3CX SIP ────────────────────────────────────────────────────────────────
 SIP_DOMAIN=YOUR_COMPANY.3cx.cloud
 SIP_REGISTRAR=127.0.0.1         # SmartSBC on same host proxies REGISTER to 3CX
+SIP_AUTH_ID=YOUR_SIP_AUTH_ID     # MUST match devices.json authId for outbound calls
+SIP_AUTH_USERNAME=YOUR_SIP_AUTH_ID
+SIP_AUTH_PASSWORD=YOUR_SIP_PASSWORD
+DEFAULT_CALLER_ID=YOUR_EXTENSION # e.g. 12611 (avoid 403 on outbound INVITE)
 
 # ── OpenClaw bridge ────────────────────────────────────────────────────────
 CLAUDE_API_URL=http://127.0.0.1:3333

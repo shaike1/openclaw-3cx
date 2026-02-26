@@ -369,3 +369,27 @@ When opening an issue, include:
 - Relevant log snippets (redact any API keys!)
 - Your deployment type (All-in-one or Split)
 - Platform (macOS, Linux, Raspberry Pi)
+
+### 403 on outbound INVITE
+
+**Symptom:** Outbound API call fails in ~1 second with `Sip non-success response: 403`.
+
+**Fix checklist:**
+1. `SIP_AUTH_ID` and `SIP_AUTH_USERNAME` must equal the selected device `authId` in `voice-app/config/devices.json`.
+2. `SIP_AUTH_PASSWORD` must match that device password.
+3. `DEFAULT_CALLER_ID` must be the extension number (e.g. `12611`).
+4. Recreate the container after env changes:
+
+```bash
+docker compose up -d --force-recreate voice-app
+```
+
+**Quick validation:**
+```bash
+curl -sS -X POST http://127.0.0.1:3000/api/outbound-call \
+  -H "Content-Type: application/json" \
+  -d {to:12610,message:hello}
+
+# Then check for ringing in logs
+docker logs --since 20s voice-app | grep -E "Phone is ringing|Sip non-success response"
+```
