@@ -130,6 +130,12 @@ Format — an **object keyed by extension** (not an array):
 | `prompt` | System prompt sent to OpenClaw with every message |
 | `voiceId` | ElevenLabs voice ID (only used if ElevenLabs is configured as TTS provider) |
 
+The `authId` and `password` come from the **IP Phone** tab in the 3CX Admin extension editor:
+
+![3CX IP Phone tab showing Auth ID and Password fields](docs/Screenshots/3cx_phone_config.png)
+
+> The **Auth ID** (labelled "Auth Id *") is **not** the extension number — it is a separate credential shown on the IP Phone tab.
+
 ---
 
 ## Environment Reference

@@ -107,15 +107,20 @@ ss -tnp | grep 5090   # Should show ESTAB to your 3CX cloud hostname
 
 1. In 3CX Admin, go to **Users → Add User**
 2. Set up an IP phone extension (e.g. extension `12611`)
-3. Click the extension → **Phone Configuration** tab
+3. Click the extension → **IP Phone** tab
 4. Note these values (needed for `devices.json`):
-   - **Extension**: `12611`
-   - **Auth ID**: e.g. `YOUR_SIP_AUTH_ID`
-   - **Password**: e.g. `YOUR_SIP_PASSWORD`
-   - **Registrar**: your 3CX cloud FQDN (e.g. `YOUR_COMPANY.3cx.cloud`)
-   - **SIP Port**: `5060`
+   - **Extension Number**: `12611`
+   - **Auth ID**: the value shown in the "Auth Id" field (e.g. `YOUR_SIP_AUTH_ID`)
+   - **Password**: the SIP password
+   - **Registrar Hostname or IP**: your 3CX cloud FQDN (e.g. `YOUR_COMPANY.3cx.cloud`)
+   - **Registrar SIP Port**: `5060`
+   - **Outbound Proxy (SBC) Address**: your server's LAN IP (e.g. `YOUR_SERVER_LAN_IP`)
 
-> ⚠️ The Auth ID is **not** the extension number. Find it under the extension's Phone Config tab — it's the "Username" field shown for SIP phones.
+![3CX IP Phone configuration tab](Screenshots/3cx_phone_config.png)
+
+> ⚠️ The **Auth ID is not the extension number**. It's a separate field on the IP Phone tab — look for "Auth Id *". In the example above, the extension is `12610` but the Auth ID is a different string entirely.
+
+> ⚠️ The **Routing Device** field (e.g. `SBC623709`) confirms the SBC is registered and routing calls. If it shows "No SBC" your SmartSBC is not connected — check Step 1.
 
 ---
 

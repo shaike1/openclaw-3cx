@@ -52,6 +52,8 @@ temp/
 *.png
 !docs/*.png
 !docs/*.jpg
+!docs/Screenshots/*.png
+!docs/Screenshots/*.jpg
 !assets/*.png
 !assets/*.jpg
 voice-app/config/devices.json
