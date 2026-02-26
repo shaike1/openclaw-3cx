@@ -12,7 +12,7 @@ services:
     network_mode: host
     command: >
       drachtio
-      --contact "sip:*:5060;transport=tcp,udp"
+      --contact "sip:*:5070;transport=tcp,udp"
       --external-ip ${EXTERNAL_IP}
       --secret ${DRACHTIO_SECRET:-cymru}
       --port 9022
@@ -47,6 +47,10 @@ services:
   voice-app:
     build: ./voice-app
     container_name: voice-app
+    environment:
+      - SIP_REGISTRAR=${SIP_REGISTRAR:-YOUR_COMPANY.3cx.cloud}
+      - SIP_TRUNK_HOST=${SIP_TRUNK_HOST:-YOUR_COMPANY.3cx.cloud}
+      - DRACHTIO_SECRET=${DRACHTIO_SECRET:-CHANGE_ME_DRACHTIO_SECRET}
     restart: unless-stopped
     network_mode: host
     env_file:

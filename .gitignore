@@ -35,6 +35,12 @@ tmp/
 temp/
 *.tmp
 
+# Backup files
+*.bak
+*.backup
+*.backup2
+*.claude-backup
+
 # Certificates (if any)
 *.pem
 *.key

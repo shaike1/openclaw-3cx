@@ -16,7 +16,8 @@ import {
   validateVoiceId,
   validateExtension,
   validateIP,
-  validateHostname
+  validateHostname,
+  validateSbcAuthKey
 } from '../validators.js';
 import { getLocalIP, getProjectRoot } from '../utils.js';
 import { isRaspberryPi } from '../platform.js';
@@ -152,7 +153,7 @@ export async function setupCommand(options = {}) {
  */
 async function setupInstallationType(installationType, existingConfig, isPi, options) {
   // Load existing config or create default
-  const baseConfig = existingConfig || createDefaultConfig();
+  const baseConfig = normalizeConfigForSetup(existingConfig || createDefaultConfig());
 
   // Run type-specific prereq checks (unless skipped)
   if (!options.skipPrereqs && installationType !== 'api-server') {
@@ -260,6 +261,52 @@ async function setupInstallationType(installationType, existingConfig, isPi, opt
     console.log(chalk.gray('  2. Call extension ' + config.devices[0].extension + ' from your phone'));
     console.log(chalk.gray('  3. Start talking to Claude!\n'));
   }
+}
+
+/**
+ * Normalize older config schemas so setup can safely reuse existing installs.
+ * @param {object} config - Loaded config
+ * @returns {object} Normalized config
+ */
+function normalizeConfigForSetup(config) {
+  const normalized = { ...config };
+
+  // API key schema migration: legacy top-level `elevenLabs` / `openai` -> `api.*`
+  const legacyElevenLabs = normalized.elevenLabs || {};
+  const legacyOpenAI = normalized.openai || {};
+  normalized.api = normalized.api || {};
+  normalized.api.elevenlabs = {
+    apiKey: normalized.api.elevenlabs?.apiKey || legacyElevenLabs.apiKey || '',
+    defaultVoiceId: normalized.api.elevenlabs?.defaultVoiceId || legacyElevenLabs.defaultVoiceId || '',
+    validated: normalized.api.elevenlabs?.validated ?? false
+  };
+  normalized.api.openai = {
+    apiKey: normalized.api.openai?.apiKey || legacyOpenAI.apiKey || '',
+    validated: normalized.api.openai?.validated ?? false
+  };
+
+  // Server schema migration: legacy `externalIp` / `apiServer.port` -> `server.*`
+  normalized.server = normalized.server || {};
+  normalized.server.externalIp = normalized.server.externalIp || normalized.externalIp || 'auto';
+  normalized.server.httpPort = normalized.server.httpPort || 3000;
+  normalized.server.claudeApiPort = normalized.server.claudeApiPort || normalized.apiServer?.port || 3333;
+
+  normalized.sip = normalized.sip || {};
+  normalized.sip.domain = normalized.sip.domain || '';
+  normalized.sip.registrar = normalized.sip.registrar || '';
+  normalized.sip.transport = normalized.sip.transport || 'udp';
+
+  normalized.devices = Array.isArray(normalized.devices) ? normalized.devices : [];
+  normalized.paths = normalized.paths || {
+    voiceApp: path.join(getProjectRoot(), 'voice-app'),
+    claudeApiServer: path.join(getProjectRoot(), 'claude-api-server')
+  };
+  normalized.secrets = normalized.secrets || {
+    drachtio: generateSecret(),
+    freeswitch: generateSecret()
+  };
+
+  return normalized;
 }
 
 /**
@@ -613,13 +660,13 @@ async function setupPi(config) {
     console.log(chalk.yellow('  ⚠️  Make sure API server is running and port is open (firewall)\n'));
   }
 
-  // Step 1: API Keys (only for voice services - TTS/STT)
-  console.log(chalk.bold('\n📡 API Configuration'));
-  config = await setupAPIKeys(config);
-
-  // Step 2: 3CX SBC Configuration (Pi mode uses SBC)
+  // Step 1: 3CX SBC Configuration (Pi mode uses SBC)
   console.log(chalk.bold('\n📡 3CX SBC Connection'));
   config = await setupSBC(config);
+
+  // Step 2: API Keys (only for voice services - TTS/STT)
+  console.log(chalk.bold('\n📡 API Configuration'));
+  config = await setupAPIKeys(config);
 
   // Step 3: Device Configuration
   console.log(chalk.bold('\n🤖 Device Configuration'));
@@ -641,6 +688,10 @@ async function setupPi(config) {
 
   // Summary
   console.log(chalk.bold.green('\n✓ Pi Setup complete!\n'));
+  console.log(chalk.bold.yellow('📡 3CX SBC Reminder:\n'));
+  console.log(chalk.gray('  Make sure your SBC is provisioned in 3CX Admin:'));
+  console.log(chalk.gray('  Admin → Settings → SBC → Add SBC → Raspberry Pi'));
+  console.log(chalk.gray('  Docs: https://www.3cx.com/docs/sbc/\n'));
   console.log(chalk.bold.cyan('📋 API server instructions:\n'));
   console.log(chalk.gray('  On your API server, run:'));
   console.log(chalk.white(`    claude-phone api-server --port ${config.server.claudeApiPort}\n`));
@@ -700,6 +751,11 @@ function createDefaultConfig() {
  * @returns {Promise<object>} Updated config
  */
 async function setupAPIKeys(config) {
+  // Defensive defaults for partially migrated configs.
+  config.api = config.api || {};
+  config.api.elevenlabs = config.api.elevenlabs || { apiKey: '', defaultVoiceId: '', validated: false };
+  config.api.openai = config.api.openai || { apiKey: '', validated: false };
+
   // ElevenLabs API Key
   const elevenLabsAnswers = await inquirer.prompt([
     {
@@ -899,6 +955,18 @@ async function setupSBC(config) {
         }
         return true;
       }
+    },
+    {
+      type: 'input',
+      name: 'sbcAuthKey',
+      message: 'SBC Auth Key ID (from 3CX Admin → Settings → SBC):',
+      default: config.sip.sbcAuthKey || '',
+      validate: (input) => {
+        if (!validateSbcAuthKey(input)) {
+          return 'Auth Key is required and must contain only letters, numbers, and dashes';
+        }
+        return true;
+      }
     }
   ]);
 
@@ -906,6 +974,8 @@ async function setupSBC(config) {
   config.sip.domain = answers.fqdn;
   // Registrar is the LOCAL SBC (drachtio registers with local SBC, not cloud)
   config.sip.registrar = '127.0.0.1';
+  // Store Auth Key for reference (SBC reads from /etc/3cxsbc.conf)
+  config.sip.sbcAuthKey = answers.sbcAuthKey;
 
   return config;
 }

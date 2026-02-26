@@ -118,15 +118,19 @@ async function conversationLoop(endpoint, dialog, callUuid, options, deviceConfi
   const deviceName = deviceConfig ? deviceConfig.name : 'Morpheus';
   const devicePrompt = deviceConfig ? deviceConfig.prompt : null;
   const voiceId = (deviceConfig && deviceConfig.voiceId) ? deviceConfig.voiceId : DEFAULT_VOICE_ID;
-  const greeting = deviceConfig && deviceConfig.name !== 'Morpheus'
-    ? "Hello! I'm " + deviceConfig.name + ". How can I help you today?"
-    : "Hello! I'm your server. How can I help you today?";
+  const language = (deviceConfig && deviceConfig.language) ? deviceConfig.language : 'en';
+  const thinkingPhrase = (deviceConfig && deviceConfig.thinkingPhrase) ? deviceConfig.thinkingPhrase : null;
+  const greeting = (deviceConfig && deviceConfig.greeting)
+    ? deviceConfig.greeting
+    : deviceConfig && deviceConfig.name !== 'Morpheus'
+      ? "Hello! I'm " + deviceConfig.name + ". How can I help you today?"
+      : "Hello! I'm your server. How can I help you today?";
 
   try {
-    console.log('[' + new Date().toISOString() + '] CONVERSATION Starting (session: ' + callUuid + ', device: ' + deviceName + ', voice: ' + voiceId + ')...');
+    console.log('[' + new Date().toISOString() + '] CONVERSATION Starting (session: ' + callUuid + ', device: ' + deviceName + ', voice: ' + voiceId + ', lang: ' + language + ')...');
 
     // Play device-specific greeting with device voice
-    const greetingUrl = await ttsService.generateSpeech(greeting, voiceId);
+    const greetingUrl = await ttsService.generateSpeech(greeting, voiceId, language);
     await endpoint.play(greetingUrl);
 
     // Start fork for entire call
@@ -172,7 +176,7 @@ async function conversationLoop(endpoint, dialog, callUuid, options, deviceConfi
       session.setCaptureEnabled(false);
 
       if (!utterance) {
-        const promptUrl = await ttsService.generateSpeech("I didn't hear anything. Are you still there?", voiceId);
+        const promptUrl = await ttsService.generateSpeech("I didn't hear anything. Are you still there?", voiceId, language);
         await endpoint.play(promptUrl);
         continue;
       }
@@ -187,27 +191,28 @@ async function conversationLoop(endpoint, dialog, callUuid, options, deviceConfi
       // Transcribe
       const transcript = await whisperClient.transcribe(utterance.audio, {
         format: 'pcm',
-        sampleRate: 16000
+        sampleRate: 16000,
+        language: language
       });
 
       console.log('[' + new Date().toISOString() + '] WHISPER: "' + transcript + '"');
 
       if (!transcript || transcript.trim().length < 2) {
-        const clarifyUrl = await ttsService.generateSpeech("Sorry, I didn't catch that. Could you repeat?", voiceId);
+        const clarifyUrl = await ttsService.generateSpeech("Sorry, I didn't catch that. Could you repeat?", voiceId, language);
         await endpoint.play(clarifyUrl);
         continue;
       }
 
       if (isGoodbye(transcript)) {
-        const byeUrl = await ttsService.generateSpeech("Goodbye! Call again anytime.", voiceId);
+        const byeUrl = await ttsService.generateSpeech("Goodbye! Call again anytime.", voiceId, language);
         await endpoint.play(byeUrl);
         break;
       }
 
       // THINKING FEEDBACK
-      const thinkingPhrase = getRandomThinkingPhrase();
-      console.log('[' + new Date().toISOString() + '] THINKING: "' + thinkingPhrase + '"');
-      const thinkingUrl = await ttsService.generateSpeech(thinkingPhrase, voiceId);
+      const phrase = thinkingPhrase || getRandomThinkingPhrase();
+      console.log('[' + new Date().toISOString() + '] THINKING: "' + phrase + '"');
+      const thinkingUrl = await ttsService.generateSpeech(phrase, voiceId, language);
       await endpoint.play(thinkingUrl);
 
       // Hold music in background
@@ -237,14 +242,14 @@ async function conversationLoop(endpoint, dialog, callUuid, options, deviceConfi
       const voiceLine = extractVoiceLine(claudeResponse);
       console.log('[' + new Date().toISOString() + '] VOICE: "' + voiceLine + '"');
 
-      const responseUrl = await ttsService.generateSpeech(voiceLine, voiceId);
+      const responseUrl = await ttsService.generateSpeech(voiceLine, voiceId, language);
       await endpoint.play(responseUrl);
 
       console.log('[' + new Date().toISOString() + '] CONVERSATION Turn ' + turnCount + ' complete');
     }
 
     if (turnCount >= MAX_TURNS) {
-      const maxUrl = await ttsService.generateSpeech("We've been talking for a while. Goodbye!", voiceId);
+      const maxUrl = await ttsService.generateSpeech("We've been talking for a while. Goodbye!", voiceId, language);
       await endpoint.play(maxUrl);
     }
 

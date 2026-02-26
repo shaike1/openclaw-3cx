@@ -211,6 +211,8 @@ export function generateEnvFile(config) {
     '# 3CX / SIP Configuration',
     `SIP_DOMAIN=${config.sip.domain}`,
     `SIP_REGISTRAR=${config.sip.registrar}`,
+    '# SBC Auth Key (reference only - SBC reads from /etc/3cxsbc.conf)',
+    `# SBC_AUTH_KEY=${config.sip.sbcAuthKey || ''}`,
     '',
     '# Default extension (primary device)',
     `SIP_EXTENSION=${config.devices[0].extension}`,

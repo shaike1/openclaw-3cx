@@ -152,6 +152,18 @@ export function validateHostname(hostname) {
 }
 
 /**
+ * Validate SBC Auth Key format
+ * @param {string} key - SBC Auth Key ID
+ * @returns {boolean} True if valid
+ */
+export function validateSbcAuthKey(key) {
+  if (!key || key.trim() === '') {
+    return false;
+  }
+  return /^[a-zA-Z0-9-]+$/.test(key.trim());
+}
+
+/**
  * Validate ElevenLabs voice ID
  * @param {string} apiKey - ElevenLabs API key
  * @param {string} voiceId - Voice ID to validate

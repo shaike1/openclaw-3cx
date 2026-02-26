@@ -65,13 +65,14 @@ async function initiateOutboundCall(srf, mediaServer, options) {
     const sipAuthUsername = process.env.SIP_AUTH_USERNAME;
     const sipAuthPassword = process.env.SIP_AUTH_PASSWORD;
 
-    const sipUri = 'sip:' + phoneNumber + '@' + sipTrunkHost;
+    const sipUri = 'sip:' + phoneNumber + '@' + sipTrunkHost + ':5060;transport=udp';
 
     logger.info('Dialing SIP URI', {
       callId,
       sipUri,
       from: defaultCallerId,
-      hasAuth: !!(sipAuthUsername && sipAuthPassword)
+      hasAuth: !!(sipAuthUsername && sipAuthPassword),
+      outboundProxy
     });
 
     // STEP 2: Create UAC (outbound call) with Early Offer
@@ -84,6 +85,7 @@ async function initiateOutboundCall(srf, mediaServer, options) {
 
     const uacOptions = {
       localSdp: localSdp,
+      proxy: outboundProxy,
       headers: {
         'From': fromHeader,
         'User-Agent': 'OpenClaw-VoiceServer/1.0',
@@ -111,6 +113,8 @@ async function initiateOutboundCall(srf, mediaServer, options) {
     let callAnswered = false;
 
     // Create the outbound call (returns dialog directly, not { uas, uac })
+    const outboundProxy = process.env.SIP_OUTBOUND_PROXY || 'sip:127.0.0.1:5060;transport=udp';
+
     const uac = await srf.createUAC(sipUri, uacOptions, {
       cbRequest: function(err, req) {
         // Called when INVITE is sent

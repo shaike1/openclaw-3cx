@@ -1,210 +1,216 @@
 /**
- * ElevenLabs Text-to-Speech Service
- * Generates speech audio files and returns URLs for FreeSWITCH playback
+ * Text-to-Speech Service
+ * Primary: OpenAI TTS
+ * Fallback: ElevenLabs (if ELEVENLABS_API_KEY set and quota available)
  */
 
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 const logger = require('./logger');
 
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 
-// Default voice IDs (can be customized)
-const DEFAULT_VOICE_ID = 'JAgnJveGGUh4qy4kh6dF'; // Morpheus voice
-const MODEL_ID = 'eleven_turbo_v2'; // Fast, low-latency model
+// OpenAI TTS voice (used when voiceId is an ElevenLabs ID or unrecognized)
+const OPENAI_TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
+const OPENAI_TTS_MODEL = 'tts-1';
 
 // Audio output directory (set via setAudioDir)
 let audioDir = path.join(__dirname, '../audio-temp');
 
-/**
- * Set the audio output directory
- * @param {string} dir - Absolute path to audio directory
- */
 function setAudioDir(dir) {
   audioDir = dir;
-
-  // Create directory if it doesn't exist
   if (!fs.existsSync(audioDir)) {
     fs.mkdirSync(audioDir, { recursive: true });
     logger.info('Created audio directory', { path: audioDir });
   }
 }
 
-/**
- * Generate unique filename for audio file
- * @param {string} text - Text being converted
- * @returns {string} Filename (without path)
- */
 function generateFilename(text) {
-  // Hash text to create unique identifier
   const hash = crypto.createHash('md5').update(text).digest('hex').substring(0, 8);
   const timestamp = Date.now();
   return `tts-${timestamp}-${hash}.mp3`;
 }
 
 /**
- * Convert text to speech using ElevenLabs API
- * @param {string} text - Text to convert to speech
- * @param {string} voiceId - ElevenLabs voice ID (optional)
- * @returns {Promise<string>} HTTP URL to audio file
+ * Generate speech using local gTTS (Google Translate TTS - no API key needed)
  */
-async function generateSpeech(text, voiceId = DEFAULT_VOICE_ID) {
-  const startTime = Date.now();
+// gTTS uses old ISO 639-1 codes in some cases
+const GTTS_LANG_MAP = { 'he': 'iw', 'yi': 'iw' };
 
-  try {
-    if (!ELEVENLABS_API_KEY) {
-      throw new Error('ELEVENLABS_API_KEY environment variable not set');
-    }
-
-    logger.info('Generating speech with ElevenLabs', {
-      textLength: text.length,
-      voiceId,
-      model: MODEL_ID
-    });
-
-    // Call ElevenLabs API
-    const response = await axios({
-      method: 'POST',
-      url: `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`,
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': ELEVENLABS_API_KEY
-      },
-      data: {
-        text,
-        model_id: MODEL_ID,
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75,
-          style: 0.0,
-          use_speaker_boost: true
-        }
-      },
-      responseType: 'arraybuffer'
-    });
-
-    // Generate filename and save audio
+function generateSpeechGTTS(text, language) {
+  return new Promise((resolve, reject) => {
     const filename = generateFilename(text);
     const filepath = path.join(audioDir, filename);
+    const rawLang = language || 'en';
+    const lang = GTTS_LANG_MAP[rawLang] || rawLang;
 
-    fs.writeFileSync(filepath, response.data);
+    logger.info('Generating speech with gTTS', { textLength: text.length, lang });
 
-    const latency = Date.now() - startTime;
-    const fileSize = response.data.length;
-
-    logger.info('Speech generation successful', {
-      filename,
-      fileSize,
-      latency,
-      textLength: text.length
+    execFile('python3', ['-c',
+      `from gtts import gTTS; t=gTTS(${JSON.stringify(text)}, lang=${JSON.stringify(lang)}); t.save(${JSON.stringify(filepath)})`
+    ], { timeout: 15000 }, (error) => {
+      if (error) return reject(new Error(`gTTS failed: ${error.message}`));
+      if (!fs.existsSync(filepath)) return reject(new Error('gTTS produced no output file'));
+      logger.info('gTTS successful', { filename, fileSize: fs.statSync(filepath).size });
+      resolve(`http://127.0.0.1:3000/audio-files/${filename}`);
     });
-
-    // Return HTTP URL (assumes audio-temp is served via HTTP)
-    // Format: http://localhost:PORT/audio/filename.mp3
-    // The HTTP server setup is handled elsewhere
-    const audioUrl = `http://127.0.0.1:3000/audio-files/${filename}`;
-
-    return audioUrl;
-
-  } catch (error) {
-    const latency = Date.now() - startTime;
-
-    logger.error('Speech generation failed', {
-      error: error.message,
-      latency,
-      textLength: text?.length,
-      responseStatus: error.response?.status,
-      responseData: error.response?.data?.toString()
-    });
-
-    // Handle specific errors
-    if (error.response?.status === 401) {
-      throw new Error('ElevenLabs API authentication failed - check API key');
-    } else if (error.response?.status === 429) {
-      throw new Error('ElevenLabs API rate limit exceeded');
-    } else if (error.response?.status === 400) {
-      throw new Error('Invalid request to ElevenLabs API');
-    }
-
-    throw new Error(`TTS generation failed: ${error.message}`);
-  }
+  });
 }
 
 /**
- * Clean up old audio files (older than specified age)
- * @param {number} maxAgeMs - Maximum age in milliseconds (default: 1 hour)
+ * Generate speech using OpenAI TTS
  */
+async function generateSpeechOpenAI(text) {
+  if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
+
+  logger.info('Generating speech with OpenAI TTS', {
+    textLength: text.length,
+    voice: OPENAI_TTS_VOICE,
+    model: OPENAI_TTS_MODEL
+  });
+
+  const response = await axios({
+    method: 'POST',
+    url: 'https://api.openai.com/v1/audio/speech',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    data: {
+      model: OPENAI_TTS_MODEL,
+      input: text,
+      voice: OPENAI_TTS_VOICE,
+      response_format: 'mp3'
+    },
+    responseType: 'arraybuffer'
+  });
+
+  const filename = generateFilename(text);
+  const filepath = path.join(audioDir, filename);
+  fs.writeFileSync(filepath, response.data);
+
+  logger.info('OpenAI TTS successful', { filename, fileSize: response.data.length });
+  return `http://127.0.0.1:3000/audio-files/${filename}`;
+}
+
+/**
+ * Generate speech using ElevenLabs
+ */
+async function generateSpeechElevenLabs(text, voiceId) {
+  if (!ELEVENLABS_API_KEY) throw new Error('ELEVENLABS_API_KEY not set');
+
+  logger.info('Generating speech with ElevenLabs', {
+    textLength: text.length,
+    voiceId,
+    model: 'eleven_turbo_v2'
+  });
+
+  const response = await axios({
+    method: 'POST',
+    url: `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`,
+    headers: {
+      'Accept': 'audio/mpeg',
+      'Content-Type': 'application/json',
+      'xi-api-key': ELEVENLABS_API_KEY
+    },
+    data: {
+      text,
+      model_id: 'eleven_turbo_v2',
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.75,
+        style: 0.0,
+        use_speaker_boost: true
+      }
+    },
+    responseType: 'arraybuffer'
+  });
+
+  const filename = generateFilename(text);
+  const filepath = path.join(audioDir, filename);
+  fs.writeFileSync(filepath, response.data);
+
+  logger.info('ElevenLabs TTS successful', { filename, fileSize: response.data.length });
+  return `http://127.0.0.1:3000/audio-files/${filename}`;
+}
+
+/**
+ * Convert text to speech - tries OpenAI first, falls back to ElevenLabs
+ * @param {string} text - Text to convert
+ * @param {string} voiceId - ElevenLabs voice ID (used only if ElevenLabs is chosen)
+ * @returns {Promise<string>} HTTP URL to audio file
+ */
+async function generateSpeech(text, voiceId, language) {
+  const startTime = Date.now();
+
+  // Try gTTS first (free, no API key needed)
+  try {
+    const url = await generateSpeechGTTS(text, language);
+    logger.info('Speech generated via gTTS', { latency: Date.now() - startTime });
+    return url;
+  } catch (error) {
+    logger.warn('gTTS failed, trying OpenAI TTS', { error: error.message });
+  }
+
+  // Fallback: OpenAI TTS
+  if (OPENAI_API_KEY) {
+    try {
+      const url = await generateSpeechOpenAI(text);
+      logger.info('Speech generated via OpenAI TTS', { latency: Date.now() - startTime });
+      return url;
+    } catch (error) {
+      logger.warn('OpenAI TTS failed, trying ElevenLabs', { error: error.message });
+    }
+  }
+
+  // Fallback: ElevenLabs
+  if (ELEVENLABS_API_KEY && voiceId) {
+    try {
+      const url = await generateSpeechElevenLabs(text, voiceId);
+      logger.info('Speech generated via ElevenLabs', { latency: Date.now() - startTime });
+      return url;
+    } catch (error) {
+      logger.error('ElevenLabs TTS failed', { error: error.message });
+      throw new Error(`TTS generation failed: ${error.message}`);
+    }
+  }
+
+  throw new Error('No TTS provider available');
+}
+
 function cleanupOldFiles(maxAgeMs = 60 * 60 * 1000) {
   try {
     const now = Date.now();
     const files = fs.readdirSync(audioDir);
-
     let deletedCount = 0;
     files.forEach(file => {
-      if (!file.startsWith('tts-') || !file.endsWith('.mp3')) {
-        return;
-      }
-
+      if (!file.startsWith('tts-') || !file.endsWith('.mp3')) return;
       const filepath = path.join(audioDir, file);
       const stats = fs.statSync(filepath);
-      const age = now - stats.mtimeMs;
-
-      if (age > maxAgeMs) {
+      if (now - stats.mtimeMs > maxAgeMs) {
         fs.unlinkSync(filepath);
         deletedCount++;
       }
     });
-
     if (deletedCount > 0) {
       logger.info('Cleaned up old audio files', { deletedCount });
     }
-
   } catch (error) {
     logger.warn('Failed to cleanup old audio files', { error: error.message });
   }
 }
 
-/**
- * Get list of available ElevenLabs voices
- * @returns {Promise<Array>} Array of voice objects
- */
-async function getAvailableVoices() {
-  try {
-    if (!ELEVENLABS_API_KEY) {
-      throw new Error('ELEVENLABS_API_KEY environment variable not set');
-    }
-
-    const response = await axios({
-      method: 'GET',
-      url: `${ELEVENLABS_API_URL}/voices`,
-      headers: {
-        'xi-api-key': ELEVENLABS_API_KEY
-      }
-    });
-
-    return response.data.voices;
-
-  } catch (error) {
-    logger.error('Failed to fetch available voices', { error: error.message });
-    throw error;
-  }
-}
-
-// Initialize audio directory
+// Initialize
 setAudioDir(audioDir);
-
-// Setup periodic cleanup (every 30 minutes)
-setInterval(() => {
-  cleanupOldFiles();
-}, 30 * 60 * 1000);
+setInterval(() => { cleanupOldFiles(); }, 30 * 60 * 1000);
 
 module.exports = {
   generateSpeech,
   setAudioDir,
-  cleanupOldFiles,
-  getAvailableVoices
+  cleanupOldFiles
 };
