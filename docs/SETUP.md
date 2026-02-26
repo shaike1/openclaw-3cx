@@ -10,23 +10,29 @@ Complete setup guide for running an AI voice assistant on a 3CX extension using 
 Phone (3CX app/desk phone)
         │
         ▼
-3CX Cloud (YOUR_COMPANY.3cx.cloud)
+3CX Cloud (your-company.3cx.cloud)
         │  SIP trunk
         ▼
-3CX SmartSBC  ← runs as OS service on your Linux server (port 5060)
-        │  SIP INVITE (routes to Contact IP:port)
+3CX SmartSBC  ← Docker container (port 5060)  [x86_64 only]
+        │  SIP INVITE
         ▼
-drachtio (Docker, port 5070)
+drachtio  ← Docker (port 5070)  [multi-arch]
         │
         ▼
-voice-app (Docker, port 3000/3001)
-   ├── Google STT (SpeechRecognition, free)
-   ├── OpenClaw AI (YOUR_OPENCLAW_IP:18790)
-   └── Google TTS (gTTS, free)
+voice-app  ← Docker (port 3000/3001)  [multi-arch]
+   ├── gTTS (Google TTS, free, no key)
+   ├── Google Web Speech STT (free, no key)
+   └── claude-api-server ← Docker (port 3333)  [multi-arch]
+              │
+              ▼
+        OpenClaw AI (separate server)
         │
         ▼
-FreeSWITCH (Docker, port 5080) — media/audio handling
+FreeSWITCH  ← Docker (port 5080)  [x86_64 only]
 ```
+
+**ARM64 note:** FreeSWITCH and 3CX SmartSBC have x86_64 pre-built images only.
+See [ARM64 section](#arm64--raspberry-pi-compatibility) for QEMU emulation workaround.
 
 ---
 
@@ -46,48 +52,34 @@ FreeSWITCH (Docker, port 5080) — media/audio handling
 
 ---
 
-## Step 1: Install the 3CX SmartSBC on the OS
+## Step 1: Provision the 3CX SmartSBC
 
-The SmartSBC runs as a **host OS service** (not in Docker). It handles SIP signaling between your server and 3CX Cloud.
+The SBC handles the TLS tunnel between your server and 3CX Cloud. It runs as a **Docker container** in this stack.
 
-### Install (Debian/Ubuntu x86_64)
+> ⚠️ **x86_64 only.** The 3CX SBC binary is x86_64 — see [ARM64 notes](#arm64--raspberry-pi-compatibility) if deploying on ARM.
 
-```bash
-# Add 3CX repo
-curl -fsSL https://downloads.3cx.com/downloads/misc/3cxsbc.gpg | sudo gpg --dearmor -o /usr/share/keyrings/3cx-sbc.gpg
-echo "deb [signed-by=/usr/share/keyrings/3cx-sbc.gpg] https://downloads.3cx.com/repo sbc main" | \
-  sudo tee /etc/apt/sources.list.d/3cxsbc.list
+### 1a. Get the SBC Auth Key from 3CX Admin
 
-sudo apt update
-sudo apt install -y 3cxsbc
-```
+1. Log into your 3CX Admin panel → **Admin → Settings → SBC**
+2. Click **Add SBC** (or select your existing SBC entry)
+3. Note the **SBC Auth Key** — you'll need it in the next step
 
-### Configure
-
-The SBC reads its auth key from `/etc/3cxsbc.conf`. After installing:
+### 1b. Provision the SBC (interactive, run once)
 
 ```bash
-# The SBC provisioning tool will write this file
-sudo /usr/sbin/3CXSBCConfig
+# From the project root — this builds the SBC container and writes /etc/3cxsbc.conf
+./sbc/provision.sh
 ```
 
-Or create it manually:
-```ini
-; /etc/3cxsbc.conf
-SBCAuthKey=YOUR_SBC_AUTH_KEY_FROM_3CX_ADMIN
-```
+The script will ask for your SBC Auth Key, build the Docker image, and write the config.
 
-### Start / Enable
+> **Existing host-service users:** If you already have 3cxsbc running as a systemd service, it will continue to work — the Docker container is for new deployments. To migrate, stop the host service first:
+> ```bash
+> sudo systemctl stop 3cxsbc && sudo systemctl disable 3cxsbc
+> ```
 
-```bash
-sudo systemctl enable 3cxsbc
-sudo systemctl start 3cxsbc
-sudo systemctl status 3cxsbc
-```
+### Verify tunnel (after starting services in Step 6)
 
-### Verify tunnel
-
-Once configured, the SBC establishes a TLS tunnel to 3CX Cloud:
 ```bash
 ss -tnp | grep 5090   # Should show ESTAB to your 3CX cloud hostname
 ```
@@ -205,45 +197,66 @@ AUDIO_DIR=/app/audio
 
 ## Step 5: OpenClaw Bridge (`claude-api-server`)
 
-A lightweight Node.js bridge sits between the voice-app and OpenClaw:
+A lightweight Node.js bridge sits between the voice-app and OpenClaw. It runs as a Docker container (recommended) or as a host process.
 
-**File:** `claude-api-server/server.js`
-**Runs on:** port 3333 (host process, not Docker)
+### Option A — Docker (recommended, included in `--profile full`)
+
+```bash
+# Set in .env:
+# OPENCLAW_HOST=YOUR_OPENCLAW_IP
+# OPENCLAW_PORT=18790
+# Then start with:
+docker compose --profile full up -d claude-api-server
+```
+
+### Option B — Host process (legacy / existing deployments)
 
 ```bash
 cd claude-api-server
 npm install
-node server.js &
+OPENCLAW_HOST=YOUR_OPENCLAW_IP node server.js &
 ```
 
-It calls `POST http://YOUR_OPENCLAW_IP:18790/conversation/process` and wraps the response as `{ success: true, response }`.
+Both options expose the bridge on port 3333. `CLAUDE_API_URL=http://127.0.0.1:3333` in `.env` works for both.
 
 ---
 
 ## Step 6: Start Docker Services
 
+### New deployment (fully containerized)
+
 ```bash
 cd /path/to/openclaw-3cx
 
-# First time — build the voice-app image
-docker compose build voice-app
+# Build all images
+docker compose --profile full build
 
-# Start all services
-docker compose up -d
+# Start everything: SBC + drachtio + FreeSWITCH + claude-api-server + voice-app
+docker compose --profile full up -d
 
 # Check logs
 docker logs voice-app -f
-docker logs drachtio -f
+docker logs 3cx-sbc -f
+docker logs claude-api-server -f
 ```
 
-### Expected startup sequence in voice-app logs:
+### Existing deployment (host SBC + host claude-api-server still running)
+
+```bash
+# Only rebuild/restart the core voice stack — leaves host SBC and api-server untouched
+docker compose build voice-app
+docker compose up -d   # starts drachtio, freeswitch, voice-app only
+```
+
+### Expected startup in voice-app logs
+
 ```
 DRACHTIO Connected at ...YOUR_SERVER_LAN_IP:5070
-MULTI-REGISTRAR Registering VoiceBot (ext 12611)
-MULTI-REGISTRAR   Contact: sip:12611@YOUR_SERVER_LAN_IP:5070
+MULTI-REGISTRAR Registering <device> (ext XXXX)
+MULTI-REGISTRAR   Contact: sip:XXXX@YOUR_SERVER_LAN_IP:5070
 FREESWITCH established successfully
 READY Voice interface is fully connected!
-MULTI-REGISTRAR VoiceBot SUCCESS - Registered as ext 12611
+MULTI-REGISTRAR <device> SUCCESS - Registered as ext XXXX
 ```
 
 ---
@@ -276,7 +289,7 @@ MULTI-REGISTRAR VoiceBot SUCCESS - Registered as ext 12611
 
 | Port | Service | Note |
 |------|---------|------|
-| 5060 | 3CX SmartSBC | Host OS process |
+| 5060 | 3CX SmartSBC | Docker (`--profile full`) or host service |
 | 5070 | drachtio | Docker, host network |
 | 5080 | FreeSWITCH SIP | Docker, host network |
 | 5090 | SBC → 3CX tunnel | Outbound only |
@@ -284,40 +297,54 @@ MULTI-REGISTRAR VoiceBot SUCCESS - Registered as ext 12611
 | 9022 | drachtio admin | Internal |
 | 3000 | voice-app HTTP API | |
 | 3001 | voice-app WebSocket | Audio streaming |
-| 3333 | claude-api-server | Host process |
+| 3333 | claude-api-server | Docker (`--profile full`) or host process |
 | 30000-30100 | RTP audio | Avoids 3CX SBC range (20000-20099) |
 
 ---
 
 ## ARM64 / Raspberry Pi Compatibility
 
-> ⚠️ **Status: Not fully tested. See notes.**
+### Component status
 
-### Docker images
-| Image | ARM64 support |
-|-------|--------------|
-| `drachtio/drachtio-server` | ✅ Multi-arch (amd64/arm64) |
-| `drachtio/drachtio-freeswitch-mrf` | ⚠️ x86_64 only — no official ARM image |
-| `voice-app` (custom Node.js) | ✅ Builds on ARM64 (node:20-slim is multi-arch) |
+| Component | ARM64 support | Notes |
+|-----------|--------------|-------|
+| `drachtio/drachtio-server` | ✅ Native | Official multi-arch image |
+| `drachtio/drachtio-freeswitch-mrf` | ⚠️ x86_64 only | No official ARM image |
+| `voice-app` (Node.js) | ✅ Native | node:20-slim is multi-arch |
+| `claude-api-server` (Node.js) | ✅ Native | node:20-slim is multi-arch |
+| `3cx-sbc` (3CX SmartSBC) | ⚠️ x86_64 only | No ARM build from 3CX |
+| `gTTS` / `SpeechRecognition` (Python) | ✅ Native | Pure Python, no binaries |
 
-The main blocker for ARM64 is `drachtio/drachtio-freeswitch-mrf`. Options:
-1. **Build from source** on ARM64: `drachtio/drachtio-freeswitch-mrf` is open source — compile locally
-2. **Use QEMU emulation**: Run x86_64 container via `platform: linux/amd64` in docker-compose (slow but functional for low-call-volume)
+### QEMU workaround (recommended for ARM64)
+
+Uncomment the `platform:` lines in `docker-compose.yml` for FreeSWITCH and/or the SBC:
 
 ```yaml
-# Temporary workaround in docker-compose.yml
 freeswitch:
   image: drachtio/drachtio-freeswitch-mrf:latest
-  platform: linux/amd64   # QEMU emulation on ARM64
+  platform: linux/amd64   # QEMU emulation
+
+sbc:
+  build: ./sbc
+  platform: linux/amd64   # QEMU emulation
 ```
 
-### 3CX SmartSBC on ARM64
-- The SmartSBC `.deb` package is x86_64 only
-- No official ARM64 build available from 3CX at this time
-- Alternative: Run SBC in x86_64 emulation or use a separate x86 box as SBC
+This works on Raspberry Pi 4 / Apple Silicon / any ARM64 Linux with Docker.
+Performance overhead is ~20–30% — acceptable for low-to-medium call volume.
 
-### gTTS / SpeechRecognition on ARM64
-Both Python packages run natively on ARM64 — no changes needed.
+### Alternative: Split deployment
+
+Run FreeSWITCH and the SBC on a separate x86_64 machine (even a cheap VPS), and run the voice-app, drachtio, and claude-api-server natively on ARM64. drachtio can connect to a remote FreeSWITCH over ESL.
+
+### Native ARM64 (advanced)
+
+FreeSWITCH compiles on ARM64. To build a native image:
+```bash
+git clone https://github.com/drachtio/drachtio-freeswitch-mrf
+cd drachtio-freeswitch-mrf
+docker buildx build --platform linux/arm64 -t drachtio-freeswitch-mrf:arm64 .
+```
+This takes 20–40 minutes but produces a fully native image with no QEMU overhead.
 
 ---
 

@@ -4,12 +4,15 @@ const http = require('http');
 const app = express();
 app.use(express.json());
 
+const OPENCLAW_HOST = process.env.OPENCLAW_HOST || '127.0.0.1';
+const OPENCLAW_PORT = parseInt(process.env.OPENCLAW_PORT || '18790', 10);
+
 function askOpenClaw(prompt) {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({ text: prompt });
     const options = {
-      hostname: 'YOUR_OPENCLAW_IP',
-      port: 18790,
+      hostname: OPENCLAW_HOST,
+      port: OPENCLAW_PORT,
       path: '/conversation/process',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

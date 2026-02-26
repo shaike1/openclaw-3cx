@@ -1,18 +1,24 @@
 {
-  "9000": {
-    "name": "Assistant",
-    "extension": "9000",
-    "authId": "your-3cx-auth-id",
-    "password": "your-3cx-password",
-    "voiceId": "your-elevenlabs-voice-id",
-    "prompt": "You are a helpful AI assistant. Keep voice responses under 40 words."
+  "YOUR_EXTENSION": {
+    "name": "YOUR_DEVICE_NAME",
+    "extension": "YOUR_EXTENSION",
+    "authId": "YOUR_SIP_AUTH_ID",
+    "password": "YOUR_SIP_PASSWORD",
+    "language": "en",
+    "greeting": "Hello! I'm your AI assistant. How can I help?",
+    "thinkingPhrase": "One moment...",
+    "prompt": "You are a helpful AI assistant. Keep voice responses under 40 words.",
+    "voiceId": ""
   },
-  "9002": {
-    "name": "ServerBot",
-    "extension": "9002",
-    "authId": "another-auth-id",
-    "password": "another-password",
-    "voiceId": "another-voice-id",
-    "prompt": "You are a server monitoring assistant. Report on system health and alerts. Keep voice responses under 40 words."
+  "_HEBREW_EXAMPLE": {
+    "name": "Assistant-HE",
+    "extension": "12611",
+    "authId": "YOUR_SIP_AUTH_ID",
+    "password": "YOUR_SIP_PASSWORD",
+    "language": "he",
+    "greeting": "שלום! אני העוזר שלך. במה אוכל לעזור?",
+    "thinkingPhrase": "רגע אחד...",
+    "prompt": "You are a helpful AI assistant. Always respond in Hebrew. Keep responses under 40 words.",
+    "voiceId": ""
   }
 }

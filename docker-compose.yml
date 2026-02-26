@@ -1,10 +1,55 @@
 version: '3.8'
 
-# CRITICAL: All containers must use network_mode: host
+# Full OpenClaw 3CX voice stack — everything in one compose file.
+#
+# ─────────────────────────────────────────────────────────────────
+# PROFILES
+# ─────────────────────────────────────────────────────────────────
+# Default (no profile) — starts the core voice stack only.
+# Use this on existing deployments where the SBC is already a host service
+# and claude-api-server is already a host process.
+#
+#   docker compose up -d
+#   docker compose up -d voice-app   (rebuild just the voice app)
+#
+# "full" profile — starts EVERYTHING including SBC and AI bridge containers.
+# Use this on new deployments or after migrating away from host services.
+# Before using: run ./sbc/provision.sh and stop the host sbc/api-server:
+#
+#   sudo systemctl stop 3cxsbc && sudo systemctl disable 3cxsbc
+#   pkill -f "node.*server.js" || true   # stop host claude-api-server if running
+#   docker compose --profile full up -d
+#
+# ─────────────────────────────────────────────────────────────────
+# IMPORTANT: All containers use network_mode: host
 # Docker bridge networking causes FreeSWITCH to advertise internal IPs
 # in SDP, making RTP unreachable from external callers.
+# ─────────────────────────────────────────────────────────────────
 
 services:
+
+  # ─────────────────────────────────────────
+  # 3CX SmartSBC
+  # Tunnels SIP signalling to 3CX Cloud.
+  # Only starts with: --profile full
+  # Config is provisioned once via: ./sbc/provision.sh
+  # ARM64: x86_64 binary only — uncomment platform: linux/amd64 for QEMU emulation
+  # ─────────────────────────────────────────
+  sbc:
+    profiles: ["full"]
+    build: ./sbc
+    container_name: 3cx-sbc
+    restart: unless-stopped
+    network_mode: host
+    # platform: linux/amd64   # Uncomment on ARM64 for QEMU emulation
+    volumes:
+      - /etc/3cxsbc.conf:/etc/3cxsbc.conf
+
+  # ─────────────────────────────────────────
+  # drachtio SIP server
+  # Handles SIP signalling (INVITE, REGISTER, etc.)
+  # ARM64: ✅ official multi-arch image
+  # ─────────────────────────────────────────
   drachtio:
     image: drachtio/drachtio-server:latest
     container_name: drachtio
@@ -17,15 +62,18 @@ services:
       --secret ${DRACHTIO_SECRET:-cymru}
       --port 9022
       --loglevel info
-    # Ports (for reference - host mode doesn't need port mapping):
-    # - 5060: SIP UDP/TCP
-    # - 9022: Admin/App Port
 
+  # ─────────────────────────────────────────
+  # FreeSWITCH media server
+  # Handles RTP audio, TTS playback, audio forking
+  # ARM64: ⚠️  x86_64 only — uncomment platform: linux/amd64 for QEMU emulation
+  # ─────────────────────────────────────────
   freeswitch:
     image: drachtio/drachtio-freeswitch-mrf:latest
     container_name: freeswitch
     restart: unless-stopped
     network_mode: host
+    # platform: linux/amd64   # Uncomment on ARM64 for QEMU emulation
     command: >
       freeswitch
       --sip-port 5080
@@ -34,35 +82,38 @@ services:
       --ext-rtp-ip ${EXTERNAL_IP}
       --ext-sip-ip ${EXTERNAL_IP}
       --advertise-external-ip
-    environment:
-      # CRITICAL: Set this to your server's LAN IP
-      # This IP goes into SDP packets so 3CX knows where to send audio
-      # Note: drachtio-freeswitch-mrf only accepts CLI flags, not env vars
-      - EXTERNAL_IP=${EXTERNAL_IP}
-    # Ports (for reference):
-    # - 8021: ESL (Event Socket Library)
-    # - 5080: Internal SIP
-    # - 30000-30100: RTP Audio (changed from 20000-20100 to avoid conflict with 3CX SBC)
 
+  # ─────────────────────────────────────────
+  # OpenClaw API bridge
+  # Translates voice-app queries → OpenClaw AI responses
+  # Only starts with: --profile full
+  # ARM64: ✅ node:20-slim is multi-arch
+  # ─────────────────────────────────────────
+  claude-api-server:
+    profiles: ["full"]
+    build: ./claude-api-server
+    container_name: claude-api-server
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - OPENCLAW_HOST=${OPENCLAW_HOST}
+      - OPENCLAW_PORT=${OPENCLAW_PORT:-18790}
+
+  # ─────────────────────────────────────────
+  # Voice application
+  # SIP handler, TTS/STT, conversation loop, outbound calling API
+  # ARM64: ✅ node:20-slim is multi-arch
+  # ─────────────────────────────────────────
   voice-app:
     build: ./voice-app
     container_name: voice-app
-    environment:
-      - SIP_REGISTRAR=${SIP_REGISTRAR:-YOUR_COMPANY.3cx.cloud}
-      - SIP_TRUNK_HOST=${SIP_TRUNK_HOST:-YOUR_COMPANY.3cx.cloud}
-      - DRACHTIO_SECRET=${DRACHTIO_SECRET:-CHANGE_ME_DRACHTIO_SECRET}
     restart: unless-stopped
     network_mode: host
     env_file:
       - .env
     volumes:
-      # Audio files directory for TTS playback
       - ./voice-app/audio:/app/audio
-      # Device configurations
       - ./voice-app/config:/app/config
     depends_on:
       - drachtio
       - freeswitch
-    # Ports (for reference):
-    # - 3000: HTTP API
-    # - 3001: WebSocket for audio streaming
