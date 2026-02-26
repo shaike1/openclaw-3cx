@@ -15,6 +15,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 const MOSS_TTS_URL = process.env.MOSS_TTS_URL;
+const GOOGLE_CLOUD_KEY = process.env.GOOGLE_CLOUD_KEY;
 
 // OpenAI TTS voice (used when voiceId is an ElevenLabs ID or unrecognized)
 const OPENAI_TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
@@ -77,6 +78,62 @@ function generateSpeechMoss(text, referenceAudio) {
       resolve(`http://127.0.0.1:3000/audio-files/${filename}`);
     });
   });
+}
+
+/**
+ * Generate speech using Google Cloud Text-to-Speech API
+ * Requires GOOGLE_CLOUD_KEY env var
+ */
+const GOOGLE_TTS_LANG = {
+  'he': 'he-IL',
+  'en': 'en-US',
+  'ar': 'ar-XA',
+  'ru': 'ru-RU',
+  'fr': 'fr-FR',
+  'es': 'es-ES',
+};
+
+// Preferred Wavenet voices per language (high quality, natural-sounding)
+const GOOGLE_TTS_VOICE = {
+  'he-IL': 'he-IL-Wavenet-A',
+  'en-US': 'en-US-Wavenet-F',
+  'ar-XA': 'ar-XA-Wavenet-A',
+  'ru-RU': 'ru-RU-Wavenet-A',
+  'fr-FR': 'fr-FR-Wavenet-A',
+  'es-ES': 'es-ES-Wavenet-B',
+};
+
+async function generateSpeechGoogleCloud(text, language) {
+  if (!GOOGLE_CLOUD_KEY) throw new Error('GOOGLE_CLOUD_KEY not set');
+
+  const langCode = GOOGLE_TTS_LANG[language] || GOOGLE_TTS_LANG['en'];
+  const voiceName = process.env.GOOGLE_TTS_VOICE || GOOGLE_TTS_VOICE[langCode] || null;
+
+  logger.info('Generating speech with Google Cloud TTS', {
+    textLength: text.length,
+    language: langCode,
+    voice: voiceName
+  });
+
+  const requestBody = {
+    input: { text },
+    voice: { languageCode: langCode },
+    audioConfig: { audioEncoding: 'MP3' }
+  };
+  if (voiceName) requestBody.voice.name = voiceName;
+
+  const response = await axios.post(
+    `https://texttospeech.googleapis.com/v1/text:synthesize?key=${GOOGLE_CLOUD_KEY}`,
+    requestBody
+  );
+
+  const audioContent = Buffer.from(response.data.audioContent, 'base64');
+  const filename = generateFilename(text);
+  const filepath = path.join(audioDir, filename);
+  fs.writeFileSync(filepath, audioContent);
+
+  logger.info('Google Cloud TTS successful', { filename, fileSize: audioContent.length });
+  return `http://127.0.0.1:3000/audio-files/${filename}`;
 }
 
 /**
@@ -184,18 +241,29 @@ async function generateSpeechElevenLabs(text, voiceId) {
 
 /**
  * Convert text to speech
- * Chain: MOSS TTS (GPU) → gTTS (free) → OpenAI TTS → ElevenLabs
+ * Chain: Google Cloud TTS → MOSS TTS (GPU) → gTTS (free) → OpenAI TTS → ElevenLabs
  *
  * @param {string} text - Text to convert
- * @param {string} voiceId - ElevenLabs voice ID (fallback only)
- * @param {string} [language] - BCP-47 language code (used by gTTS)
+ * @param {string} voiceId - ElevenLabs voice ID (last-resort fallback)
+ * @param {string} [language] - BCP-47 language code
  * @param {string} [referenceAudio] - Path or URL for MOSS TTS voice cloning
  * @returns {Promise<string>} HTTP URL to audio file
  */
 async function generateSpeech(text, voiceId, language, referenceAudio) {
   const startTime = Date.now();
 
-  // Primary: MOSS TTS (GPU-accelerated, best quality)
+  // Primary: Google Cloud TTS (high quality, requires GOOGLE_CLOUD_KEY)
+  if (GOOGLE_CLOUD_KEY) {
+    try {
+      const url = await generateSpeechGoogleCloud(text, language);
+      logger.info('Speech generated via Google Cloud TTS', { latency: Date.now() - startTime });
+      return url;
+    } catch (error) {
+      logger.warn('Google Cloud TTS failed, falling back', { error: error.message });
+    }
+  }
+
+  // Fallback 1: MOSS TTS (GPU-accelerated, voice cloning)
   if (MOSS_TTS_URL) {
     try {
       const url = await generateSpeechMoss(text, referenceAudio);
@@ -206,7 +274,7 @@ async function generateSpeech(text, voiceId, language, referenceAudio) {
     }
   }
 
-  // Fallback 1: gTTS (free, no API key)
+  // Fallback 2: gTTS (free, no API key)
   try {
     const url = await generateSpeechGTTS(text, language);
     logger.info('Speech generated via gTTS', { latency: Date.now() - startTime });
