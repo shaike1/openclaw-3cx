@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { getProjectRoot } from './utils.js';
 
 /**
  * Get the config directory path
@@ -105,9 +106,41 @@ export function getDockerComposePath() {
 }
 
 /**
- * Get the .env file path
+ * Get the .env file path (in CLI config dir, for legacy use)
  * @returns {string} Path to generated .env
  */
 export function getEnvPath() {
   return path.join(getConfigDir(), '.env');
+}
+
+/**
+ * Get the project's .env file path (where Docker actually reads from)
+ * @returns {string} Path to <project-root>/.env
+ */
+export function getProjectEnvPath() {
+  return path.join(getProjectRoot(), '.env');
+}
+
+/**
+ * Get the devices.json path (where voice-app reads from)
+ * @returns {string} Path to voice-app/config/devices.json
+ */
+export function getDevicesJsonPath() {
+  return path.join(getProjectRoot(), 'voice-app', 'config', 'devices.json');
+}
+
+/**
+ * Get the ARM64 compose overlay path
+ * @returns {string} Path to docker-compose.arm64.yml
+ */
+export function getArm64OverlayPath() {
+  return path.join(getProjectRoot(), 'docker-compose.arm64.yml');
+}
+
+/**
+ * Get the project's main docker-compose.yml path
+ * @returns {string} Path to <project-root>/docker-compose.yml
+ */
+export function getProjectComposePath() {
+  return path.join(getProjectRoot(), 'docker-compose.yml');
 }

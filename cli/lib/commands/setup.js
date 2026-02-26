@@ -4,6 +4,7 @@ import ora from 'ora';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import { execSync } from 'child_process';
 import {
   loadConfig,
@@ -234,32 +235,17 @@ async function setupInstallationType(installationType, existingConfig, isPi, opt
   if (installationType === 'api-server') {
     console.log(chalk.gray('To start the API server:'));
     console.log(chalk.gray('  claude-phone start\n'));
-    console.log(chalk.gray(`The API server will listen on port ${config.server.claudeApiPort}.`));
-    console.log(chalk.gray('Voice servers can connect to: http://YOUR_IP:' + config.server.claudeApiPort + '\n'));
-  } else if (installationType === 'voice-server') {
-    if (isPi) {
-      console.log(chalk.bold.cyan('📋 API server instructions:\n'));
-      console.log(chalk.gray('  On your API server, run:'));
-      console.log(chalk.white(`    claude-phone api-server --port ${config.server.claudeApiPort}\n`));
-      console.log(chalk.gray('  This starts the Claude API wrapper that the Pi will connect to.\n'));
-      console.log(chalk.bold.cyan('📋 Pi-side next steps:\n'));
-      console.log(chalk.gray('  1. Run "claude-phone start" to launch voice-app'));
-      console.log(chalk.gray('  2. Call extension ' + config.devices[0].extension + ' from your phone'));
-      console.log(chalk.gray('  3. Start talking to Claude!\n'));
-    } else {
-      console.log(chalk.gray('Make sure your API server is running with:'));
-      console.log(chalk.gray('  claude-phone api-server (on the API server machine)\n'));
-      console.log(chalk.gray('Next steps:'));
-      console.log(chalk.gray('  1. Run "claude-phone start" to launch voice services'));
-      console.log(chalk.gray('  2. Call extension ' + config.devices[0].extension + ' from your phone'));
-      console.log(chalk.gray('  3. Start talking to Claude!\n'));
-    }
   } else {
-    // Both
+    if (config.deployment?.openclawHost) {
+      console.log(chalk.gray(`OpenClaw: http://${config.deployment.openclawHost}:${config.deployment.openclawPort || 18790}`));
+      console.log(chalk.gray('Make sure OpenClaw is running and accessible.\n'));
+    }
     console.log(chalk.gray('Next steps:'));
-    console.log(chalk.gray('  1. Run "claude-phone start" to launch all services'));
-    console.log(chalk.gray('  2. Call extension ' + config.devices[0].extension + ' from your phone'));
-    console.log(chalk.gray('  3. Start talking to Claude!\n'));
+    console.log(chalk.gray('  1. Run "claude-phone start" to launch voice services'));
+    if (config.devices && config.devices[0]) {
+      console.log(chalk.gray('  2. Call extension ' + config.devices[0].extension + ' from your 3CX app'));
+    }
+    console.log(chalk.gray('  3. Start talking!\n'));
   }
 }
 
@@ -295,6 +281,13 @@ function normalizeConfigForSetup(config) {
   normalized.sip.domain = normalized.sip.domain || '';
   normalized.sip.registrar = normalized.sip.registrar || '';
   normalized.sip.transport = normalized.sip.transport || 'udp';
+
+  // OpenClaw deployment fields
+  normalized.deployment = normalized.deployment || {};
+  normalized.deployment.openclawHost = normalized.deployment.openclawHost || '';
+  normalized.deployment.openclawPort = normalized.deployment.openclawPort || 18790;
+  normalized.deployment.topology = normalized.deployment.topology || 'x86';
+  normalized.deployment.useQemu = normalized.deployment.useQemu || false;
 
   normalized.devices = Array.isArray(normalized.devices) ? normalized.devices : [];
   normalized.paths = normalized.paths || {
@@ -342,93 +335,49 @@ async function setupApiServer(config) {
 
 /**
  * Voice Server only setup (non-Pi)
- * Asks for SIP, API keys, devices, and API server connection
  * @param {object} config - Current config
  * @returns {Promise<object>} Updated config
  */
 async function setupVoiceServer(config) {
-  // Ensure secrets exist
   if (!config.secrets) {
-    config.secrets = {
-      drachtio: generateSecret(),
-      freeswitch: generateSecret()
-    };
+    config.secrets = { drachtio: generateSecret(), freeswitch: generateSecret() };
   }
-
-  // Set deployment mode
   if (!config.deployment) {
     config.deployment = { mode: 'voice-server' };
   } else {
     config.deployment.mode = 'voice-server';
   }
 
-  // Step 1: 3CX/SIP Configuration
-  console.log(chalk.bold('\n☎️  SIP Configuration'));
-  config = await setupSIP(config);
+  // Step 1: Deployment architecture
+  console.log(chalk.bold('\n🏗️  Deployment Architecture'));
+  config = await setupArch(config);
 
-  // Step 2: API Server Connection
-  console.log(chalk.bold('\n🖥️  API Server Connection'));
-  const apiServerAnswers = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'apiServerIp',
-      message: 'API Server IP address:',
-      default: config.deployment.apiServerIp || '',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'API Server IP is required';
-        }
-        if (!validateIP(input)) {
-          return 'Invalid IP address format';
-        }
-        return true;
-      }
-    },
-    {
-      type: 'input',
-      name: 'apiServerPort',
-      message: 'API Server port:',
-      default: config.server?.claudeApiPort || 3333,
-      validate: (input) => {
-        const port = parseInt(input, 10);
-        if (isNaN(port) || port < 1024 || port > 65535) {
-          return 'Port must be between 1024 and 65535';
-        }
-        return true;
-      }
-    }
-  ]);
+  // Step 2: OpenClaw AI gateway
+  console.log(chalk.bold('\n🤖 OpenClaw AI Configuration'));
+  config = await setupOpenClaw(config);
 
-  config.deployment.apiServerIp = apiServerAnswers.apiServerIp;
-  config.server = config.server || {};
-  config.server.claudeApiPort = parseInt(apiServerAnswers.apiServerPort, 10);
-
-  // Step 3: API Keys (for TTS/STT)
-  console.log(chalk.bold('\n📡 API Configuration'));
+  // Step 3: API Keys (optional)
+  console.log(chalk.bold('\n📡 API Keys (optional)'));
   config = await setupAPIKeys(config);
 
-  // Step 4: Device Configuration
-  console.log(chalk.bold('\n🤖 Device Configuration'));
+  // Step 4: 3CX SBC + SIP
+  console.log(chalk.bold('\n☎️  3CX SBC Configuration'));
+  config = await setupSBC(config);
+
+  // Step 5: Device
+  console.log(chalk.bold('\n📱 Device Configuration'));
   config = await setupDevice(config);
 
-  // Step 5: Server Configuration (IP only, no API port)
+  // Step 6: Server (LAN IP, ports)
   console.log(chalk.bold('\n⚙️  Server Configuration'));
   const localIp = getLocalIP();
   const serverAnswers = await inquirer.prompt([
     {
       type: 'input',
       name: 'externalIp',
-      message: 'Server LAN IP (for RTP audio):',
+      message: 'Server LAN IP (must be LAN IP — SBC routes SIP to this address):',
       default: config.server.externalIp === 'auto' ? localIp : config.server.externalIp,
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'IP address is required';
-        }
-        if (!validateIP(input)) {
-          return 'Invalid IP address format';
-        }
-        return true;
-      }
+      validate: (input) => validateIP(input) ? true : 'Invalid IP address format'
     },
     {
       type: 'input',
@@ -437,10 +386,7 @@ async function setupVoiceServer(config) {
       default: config.server.httpPort || 3000,
       validate: (input) => {
         const port = parseInt(input, 10);
-        if (isNaN(port) || port < 1024 || port > 65535) {
-          return 'Port must be between 1024 and 65535';
-        }
-        return true;
+        return (!isNaN(port) && port >= 1024 && port <= 65535) ? true : 'Port must be between 1024 and 65535';
       }
     }
   ]);
@@ -457,34 +403,36 @@ async function setupVoiceServer(config) {
  * @returns {Promise<object>} Updated config
  */
 async function setupBoth(config) {
-  // Ensure secrets exist for existing configs (backwards compatibility)
   if (!config.secrets) {
-    config.secrets = {
-      drachtio: generateSecret(),
-      freeswitch: generateSecret()
-    };
+    config.secrets = { drachtio: generateSecret(), freeswitch: generateSecret() };
   }
-
-  // Ensure deployment mode exists
   if (!config.deployment) {
     config.deployment = { mode: 'both' };
   } else {
     config.deployment.mode = 'both';
   }
 
-  // Step 1: API Keys
-  console.log(chalk.bold('\n📡 API Configuration'));
+  // Step 1: Deployment architecture (ARM64/QEMU/split)
+  console.log(chalk.bold('\n🏗️  Deployment Architecture'));
+  config = await setupArch(config);
+
+  // Step 2: OpenClaw AI gateway
+  console.log(chalk.bold('\n🤖 OpenClaw AI Configuration'));
+  config = await setupOpenClaw(config);
+
+  // Step 3: API Keys (all optional — gTTS is the free default)
+  console.log(chalk.bold('\n📡 API Keys (optional)'));
   config = await setupAPIKeys(config);
 
-  // Step 2: 3CX/SIP Configuration
-  console.log(chalk.bold('\n☎️  SIP Configuration'));
-  config = await setupSIP(config);
+  // Step 4: 3CX SBC + SIP
+  console.log(chalk.bold('\n☎️  3CX SBC Configuration'));
+  config = await setupSBC(config);
 
-  // Step 3: Device Configuration
-  console.log(chalk.bold('\n🤖 Device Configuration'));
+  // Step 5: Device
+  console.log(chalk.bold('\n📱 Device Configuration'));
   config = await setupDevice(config);
 
-  // Step 4: Server Configuration
+  // Step 6: Server (LAN IP, ports)
   console.log(chalk.bold('\n⚙️  Server Configuration'));
   config = await setupServer(config);
 
@@ -607,64 +555,27 @@ async function setupPi(config) {
   config.deployment.pi.has3cxSbc = has3cxSbc;
   config.deployment.pi.drachtioPort = has3cxSbc ? 5070 : 5060;
 
-  // Ask for API server IP and port first, then check connectivity
-  const apiServerAnswers = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'macIp',
-      message: 'API server IP address (where claude-api-server runs):',
-      default: config.deployment.pi.macIp || '',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'API server IP is required';
-        }
-        if (!validateIP(input)) {
-          return 'Invalid IP address format';
-        }
-        return true;
-      }
-    },
-    {
-      type: 'input',
-      name: 'claudeApiPort',
-      message: 'Claude API server port:',
-      default: String(config.server?.claudeApiPort || 3333),
-      validate: (input) => {
-        const port = parseInt(input, 10);
-        if (isNaN(port) || port < 1024 || port > 65535) {
-          return 'Port must be between 1024 and 65535';
-        }
-        return true;
-      }
+  // Step 1: OpenClaw AI gateway
+  console.log(chalk.bold('\n🤖 OpenClaw AI Configuration'));
+  config = await setupOpenClaw(config);
+
+  // Optionally verify connectivity
+  if (config.deployment.openclawHost) {
+    const openclawUrl = `http://${config.deployment.openclawHost}:${config.deployment.openclawPort || 18790}`;
+    const reachSpinner = ora(`Checking OpenClaw at ${openclawUrl}...`).start();
+    const apiHealth = await checkClaudeApiServer(openclawUrl);
+    if (apiHealth.healthy) {
+      reachSpinner.succeed(`OpenClaw is healthy at ${openclawUrl}`);
+    } else {
+      reachSpinner.warn(`OpenClaw not responding at ${openclawUrl} — continuing anyway`);
     }
-  ]);
-
-  const { macIp, claudeApiPort } = apiServerAnswers;
-
-  config.deployment.pi.macIp = macIp;
-  config.server = config.server || {};
-  config.server.claudeApiPort = parseInt(claudeApiPort, 10);
-
-  // Now check connectivity on the specified port
-  const reachSpinner = ora(`Checking API server at ${macIp}:${claudeApiPort}...`).start();
-  const apiUrl = `http://${macIp}:${claudeApiPort}`;
-  const apiHealth = await checkClaudeApiServer(apiUrl);
-
-  if (apiHealth.healthy) {
-    reachSpinner.succeed(`API server is healthy at ${apiUrl}`);
-  } else if (apiHealth.reachable) {
-    reachSpinner.warn(`API server reachable but not responding at ${apiUrl}`);
-    console.log(chalk.yellow('  ⚠️  Make sure claude-api-server is running\n'));
-  } else {
-    reachSpinner.warn(`Cannot reach API server at ${apiUrl}`);
-    console.log(chalk.yellow('  ⚠️  Make sure API server is running and port is open (firewall)\n'));
   }
 
-  // Step 1: 3CX SBC Configuration (Pi mode uses SBC)
+  // Step 2: 3CX SBC Configuration (Pi mode uses SBC)
   console.log(chalk.bold('\n📡 3CX SBC Connection'));
   config = await setupSBC(config);
 
-  // Step 2: API Keys (only for voice services - TTS/STT)
+  // Step 3: API Keys (optional — gTTS is free)
   console.log(chalk.bold('\n📡 API Configuration'));
   config = await setupAPIKeys(config);
 
@@ -692,14 +603,15 @@ async function setupPi(config) {
   console.log(chalk.gray('  Make sure your SBC is provisioned in 3CX Admin:'));
   console.log(chalk.gray('  Admin → Settings → SBC → Add SBC → Raspberry Pi'));
   console.log(chalk.gray('  Docs: https://www.3cx.com/docs/sbc/\n'));
-  console.log(chalk.bold.cyan('📋 API server instructions:\n'));
-  console.log(chalk.gray('  On your API server, run:'));
-  console.log(chalk.white(`    claude-phone api-server --port ${config.server.claudeApiPort}\n`));
-  console.log(chalk.gray('  This starts the Claude API wrapper that the Pi will connect to.\n'));
-  console.log(chalk.bold.cyan('📋 Pi-side next steps:\n'));
-  console.log(chalk.gray('  1. Run "claude-phone start" to launch voice-app'));
+  if (config.deployment?.openclawHost) {
+    console.log(chalk.bold.cyan('📋 OpenClaw connection:\n'));
+    console.log(chalk.gray(`  OpenClaw: http://${config.deployment.openclawHost}:${config.deployment.openclawPort || 18790}`));
+    console.log(chalk.gray('  Make sure OpenClaw is running and reachable.\n'));
+  }
+  console.log(chalk.bold.cyan('📋 Next steps:\n'));
+  console.log(chalk.gray('  1. Run "claude-phone start" to launch voice services'));
   console.log(chalk.gray('  2. Call extension ' + config.devices[0].extension + ' from your phone'));
-  console.log(chalk.gray('  3. Start talking to Claude!\n'));
+  console.log(chalk.gray('  3. Start talking!\n'));
 
   return config;
 }
@@ -746,140 +658,88 @@ function createDefaultConfig() {
 }
 
 /**
- * Setup API keys with validation
+ * Setup API keys — all optional (gTTS + Google Web Speech work without any keys)
  * @param {object} config - Current config
  * @returns {Promise<object>} Updated config
  */
 async function setupAPIKeys(config) {
-  // Defensive defaults for partially migrated configs.
   config.api = config.api || {};
   config.api.elevenlabs = config.api.elevenlabs || { apiKey: '', defaultVoiceId: '', validated: false };
   config.api.openai = config.api.openai || { apiKey: '', validated: false };
 
-  // ElevenLabs API Key
-  const elevenLabsAnswers = await inquirer.prompt([
-    {
+  console.log(chalk.gray('Default TTS/STT: gTTS (Google Translate) + Google Web Speech — free, no keys required.'));
+  console.log(chalk.gray('ElevenLabs and OpenAI are optional premium fallbacks.\n'));
+
+  // ElevenLabs (optional)
+  const { wantElevenLabs } = await inquirer.prompt([{
+    type: 'confirm',
+    name: 'wantElevenLabs',
+    message: 'Add ElevenLabs API key? (optional, premium TTS voices)',
+    default: !!(config.api.elevenlabs?.apiKey)
+  }]);
+
+  if (wantElevenLabs) {
+    const elevenLabsAnswers = await inquirer.prompt([{
       type: 'password',
       name: 'apiKey',
       message: 'ElevenLabs API key:',
       default: config.api.elevenlabs.apiKey,
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'API key is required';
-        }
-        return true;
-      }
+      validate: (input) => input?.trim() ? true : 'API key is required'
+    }]);
+
+    const elevenLabsKey = elevenLabsAnswers.apiKey;
+    const spinner = ora('Validating ElevenLabs API key...').start();
+    const elevenLabsResult = await validateElevenLabsKey(elevenLabsKey);
+
+    if (!elevenLabsResult.valid) {
+      spinner.fail(`Invalid ElevenLabs API key: ${elevenLabsResult.error}`);
+      const { continueAnyway } = await inquirer.prompt([{
+        type: 'confirm', name: 'continueAnyway', message: 'Continue anyway?', default: false
+      }]);
+      if (!continueAnyway) throw new Error('Setup cancelled due to invalid API key');
+      config.api.elevenlabs = { apiKey: elevenLabsKey, defaultVoiceId: '', validated: false };
+    } else {
+      spinner.succeed('ElevenLabs API key validated');
+      config.api.elevenlabs = { apiKey: elevenLabsKey, defaultVoiceId: '', validated: true };
     }
-  ]);
-
-  const elevenLabsKey = elevenLabsAnswers.apiKey;
-  const spinner = ora('Validating ElevenLabs API key...').start();
-
-  const elevenLabsResult = await validateElevenLabsKey(elevenLabsKey);
-  if (!elevenLabsResult.valid) {
-    spinner.fail(`Invalid ElevenLabs API key: ${elevenLabsResult.error}`);
-    console.log(chalk.yellow('\n⚠️  You can continue setup, but the key may not work.'));
-    const { continueAnyway } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'continueAnyway',
-        message: 'Continue anyway?',
-        default: false
-      }
-    ]);
-
-    if (!continueAnyway) {
-      throw new Error('Setup cancelled due to invalid API key');
-    }
-
-    config.api.elevenlabs = { apiKey: elevenLabsKey, defaultVoiceId: '', validated: false };
   } else {
-    spinner.succeed('ElevenLabs API key validated');
-    config.api.elevenlabs = { apiKey: elevenLabsKey, defaultVoiceId: '', validated: true };
+    config.api.elevenlabs = { apiKey: '', defaultVoiceId: '', validated: false };
   }
 
-  // Ask for default voice ID immediately after API key
-  const voiceIdAnswers = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'voiceId',
-      message: 'ElevenLabs default voice ID (for all devices):',
-      default: config.api.elevenlabs.defaultVoiceId || '',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'Voice ID is required';
-        }
-        return true;
-      }
-    }
-  ]);
+  // OpenAI (optional)
+  const { wantOpenAI } = await inquirer.prompt([{
+    type: 'confirm',
+    name: 'wantOpenAI',
+    message: 'Add OpenAI API key? (optional, Whisper STT fallback)',
+    default: !!(config.api.openai?.apiKey)
+  }]);
 
-  const defaultVoiceId = voiceIdAnswers.voiceId;
-  const voiceSpinner = ora('Validating ElevenLabs voice ID...').start();
-
-  const voiceValidation = await validateVoiceId(elevenLabsKey, defaultVoiceId);
-  if (!voiceValidation.valid) {
-    voiceSpinner.fail(`Voice ID validation failed: ${voiceValidation.error}`);
-    console.log(chalk.yellow('\n⚠️  You can continue setup, but the voice ID may not work.'));
-    const { continueAnyway } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'continueAnyway',
-        message: 'Continue anyway?',
-        default: false
-      }
-    ]);
-
-    if (!continueAnyway) {
-      throw new Error('Setup cancelled due to invalid voice ID');
-    }
-
-    config.api.elevenlabs.defaultVoiceId = defaultVoiceId;
-  } else {
-    voiceSpinner.succeed(`Voice ID validated: ${voiceValidation.name}`);
-    config.api.elevenlabs.defaultVoiceId = defaultVoiceId;
-  }
-
-  // OpenAI API Key
-  const openAIAnswers = await inquirer.prompt([
-    {
+  if (wantOpenAI) {
+    const openAIAnswers = await inquirer.prompt([{
       type: 'password',
       name: 'apiKey',
-      message: 'OpenAI API key (for Whisper STT):',
+      message: 'OpenAI API key:',
       default: config.api.openai.apiKey,
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'API key is required';
-        }
-        return true;
-      }
+      validate: (input) => input?.trim() ? true : 'API key is required'
+    }]);
+
+    const openAIKey = openAIAnswers.apiKey;
+    const openAISpinner = ora('Validating OpenAI API key...').start();
+    const openAIResult = await validateOpenAIKey(openAIKey);
+
+    if (!openAIResult.valid) {
+      openAISpinner.fail(`Invalid OpenAI API key: ${openAIResult.error}`);
+      const { continueAnyway } = await inquirer.prompt([{
+        type: 'confirm', name: 'continueAnyway', message: 'Continue anyway?', default: false
+      }]);
+      if (!continueAnyway) throw new Error('Setup cancelled due to invalid API key');
+      config.api.openai = { apiKey: openAIKey, validated: false };
+    } else {
+      openAISpinner.succeed('OpenAI API key validated');
+      config.api.openai = { apiKey: openAIKey, validated: true };
     }
-  ]);
-
-  const openAIKey = openAIAnswers.apiKey;
-  const openAISpinner = ora('Validating OpenAI API key...').start();
-
-  const openAIResult = await validateOpenAIKey(openAIKey);
-  if (!openAIResult.valid) {
-    openAISpinner.fail(`Invalid OpenAI API key: ${openAIResult.error}`);
-    console.log(chalk.yellow('\n⚠️  You can continue setup, but the key may not work.'));
-    const { continueAnyway } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'continueAnyway',
-        message: 'Continue anyway?',
-        default: false
-      }
-    ]);
-
-    if (!continueAnyway) {
-      throw new Error('Setup cancelled due to invalid API key');
-    }
-
-    config.api.openai = { apiKey: openAIKey, validated: false };
   } else {
-    openAISpinner.succeed('OpenAI API key validated');
-    config.api.openai = { apiKey: openAIKey, validated: true };
+    config.api.openai = { apiKey: '', validated: false };
   }
 
   return config;
@@ -986,107 +846,91 @@ async function setupSBC(config) {
  * @returns {Promise<object>} Updated config
  */
 async function setupDevice(config) {
-  // Get first device or create new
   const existingDevice = config.devices.length > 0 ? config.devices[0] : null;
 
   const answers = await inquirer.prompt([
     {
       type: 'input',
       name: 'name',
-      message: 'Device name (e.g., Morpheus):',
-      default: existingDevice?.name || 'Morpheus',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'Device name is required';
-        }
-        return true;
-      }
+      message: 'Device name (e.g., MyBot):',
+      default: existingDevice?.name || VoiceBot,
+      validate: (input) => input?.trim() ? true : 'Device name is required'
     },
     {
       type: 'input',
       name: 'extension',
       message: 'SIP extension number (e.g., 9000):',
       default: existingDevice?.extension || '9000',
-      validate: (input) => {
-        if (!validateExtension(input)) {
-          return 'Extension must be 4-5 digits';
-        }
-        return true;
-      }
+      validate: (input) => validateExtension(input) ? true : 'Extension must be 4-5 digits'
     },
     {
       type: 'input',
       name: 'authId',
-      message: 'SIP auth ID:',
+      message: 'SIP auth ID (from 3CX IP Phone tab — NOT the extension number):',
       default: existingDevice?.authId || '',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'Auth ID is required';
-        }
-        return true;
-      }
+      validate: (input) => input?.trim() ? true : 'Auth ID is required'
     },
     {
       type: 'password',
       name: 'password',
       message: 'SIP password:',
       default: existingDevice?.password || '',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'Password is required';
-        }
-        return true;
-      }
+      validate: (input) => input?.trim() ? true : 'Password is required'
     },
     {
       type: 'input',
-      name: 'voiceId',
-      message: 'ElevenLabs voice ID:',
-      default: existingDevice?.voiceId || config.api.elevenlabs.defaultVoiceId || '',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'Voice ID is required';
-        }
-        return true;
-      }
+      name: 'language',
+      message: 'Language code (BCP-47, e.g. en, he, ar, ru):',
+      default: existingDevice?.language || 'en',
+      validate: (input) => input?.trim() ? true : 'Language is required'
+    },
+    {
+      type: 'input',
+      name: 'greeting',
+      message: 'Greeting (spoken when call connects):',
+      default: existingDevice?.greeting || 'Hello! How can I help you today?'
+    },
+    {
+      type: 'input',
+      name: 'thinkingPhrase',
+      message: 'Thinking phrase (spoken while waiting for AI response):',
+      default: existingDevice?.thinkingPhrase || 'Let me think...'
     },
     {
       type: 'input',
       name: 'prompt',
-      message: 'System prompt:',
+      message: 'System prompt (sent to OpenClaw with every message):',
       default: existingDevice?.prompt || 'You are a helpful AI assistant. Keep voice responses under 40 words.',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'System prompt is required';
-        }
-        return true;
-      }
+      validate: (input) => input?.trim() ? true : 'System prompt is required'
     }
   ]);
 
-  // Validate voice ID with ElevenLabs API
-  const voiceSpinner = ora('Validating ElevenLabs voice ID...').start();
-  const voiceValidation = await validateVoiceId(config.api.elevenlabs.apiKey, answers.voiceId);
+  // ElevenLabs voice ID — only ask if API key is configured
+  let voiceId = existingDevice?.voiceId || '';
+  if (config.api?.elevenlabs?.apiKey) {
+    const voiceAnswers = await inquirer.prompt([{
+      type: 'input',
+      name: 'voiceId',
+      message: 'ElevenLabs voice ID:',
+      default: existingDevice?.voiceId || config.api.elevenlabs.defaultVoiceId || '',
+      validate: (input) => input?.trim() ? true : 'Voice ID is required'
+    }]);
+    voiceId = voiceAnswers.voiceId;
 
-  if (!voiceValidation.valid) {
-    voiceSpinner.fail(`Voice ID validation failed: ${voiceValidation.error}`);
-    console.log(chalk.yellow('\n⚠️  You can continue setup, but the voice ID may not work.'));
-    const { continueAnyway } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'continueAnyway',
-        message: 'Continue anyway?',
-        default: false
+    const voiceSpinner = ora('Validating ElevenLabs voice ID...').start();
+    const voiceValidation = await validateVoiceId(config.api.elevenlabs.apiKey, voiceId);
+    if (!voiceValidation.valid) {
+      voiceSpinner.fail(`Voice ID validation failed: ${voiceValidation.error}`);
+      const { continueAnyway } = await inquirer.prompt([{
+        type: 'confirm', name: 'continueAnyway', message: 'Continue anyway?', default: false
+      }]);
+      if (!continueAnyway) {
+        console.log(chalk.gray('\nReturning to device setup...'));
+        return setupDevice(config);
       }
-    ]);
-
-    if (!continueAnyway) {
-      // Let user re-enter voice ID
-      console.log(chalk.gray('\nReturning to device setup...'));
-      return setupDevice(config);
+    } else {
+      voiceSpinner.succeed(`Voice ID validated: ${voiceValidation.name}`);
     }
-  } else {
-    voiceSpinner.succeed(`Voice ID validated: ${voiceValidation.name}`);
   }
 
   const device = {
@@ -1094,11 +938,13 @@ async function setupDevice(config) {
     extension: answers.extension,
     authId: answers.authId,
     password: answers.password,
-    voiceId: answers.voiceId,
+    voiceId,
+    language: answers.language,
+    greeting: answers.greeting,
+    thinkingPhrase: answers.thinkingPhrase,
     prompt: answers.prompt
   };
 
-  // Replace first device or add new
   if (config.devices.length > 0) {
     config.devices[0] = device;
   } else {
@@ -1208,6 +1054,119 @@ async function setupPiServer(config) {
 
   config.server.externalIp = answers.externalIp;
   config.server.httpPort = parseInt(answers.httpPort, 10);
+
+  return config;
+}
+
+/**
+ * Setup OpenClaw AI gateway configuration
+ * @param {object} config - Current config
+ * @returns {Promise<object>} Updated config
+ */
+async function setupOpenClaw(config) {
+  console.log(chalk.gray('OpenClaw is the AI gateway that processes voice conversations.'));
+  console.log(chalk.gray('It runs on a separate server and is called by the local claude-api-server bridge.\n'));
+
+  config.deployment = config.deployment || {};
+
+  const answers = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'host',
+      message: 'OpenClaw server IP or hostname:',
+      default: config.deployment.openclawHost || '',
+      validate: (input) => {
+        if (!input?.trim()) return 'OpenClaw host is required';
+        if (!validateIP(input) && !validateHostname(input)) return 'Invalid IP address or hostname';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'port',
+      message: 'OpenClaw conversation port:',
+      default: String(config.deployment.openclawPort || 18790),
+      validate: (input) => {
+        const port = parseInt(input, 10);
+        return (!isNaN(port) && port > 0 && port < 65536) ? true : 'Port must be between 1 and 65535';
+      }
+    }
+  ]);
+
+  config.deployment.openclawHost = answers.host;
+  config.deployment.openclawPort = parseInt(answers.port, 10);
+
+  return config;
+}
+
+/**
+ * Setup deployment architecture (ARM64/QEMU/x86/split)
+ * @param {object} config - Current config
+ * @returns {Promise<object>} Updated config
+ */
+async function setupArch(config) {
+  const arch = os.arch();
+  const isArm64 = arch === 'arm64';
+
+  if (isArm64) {
+    console.log(chalk.yellow(`ARM64 architecture detected (${arch}).`));
+    console.log(chalk.gray('FreeSWITCH and 3CX SBC only have x86_64 pre-built images.'));
+    console.log(chalk.gray('QEMU emulation is available and works well for voice bot workloads.\n'));
+  }
+
+  const choices = [];
+  if (isArm64) {
+    choices.push({
+      name: 'All on this ARM64 host — QEMU emulation for FreeSWITCH + SBC (recommended)',
+      value: 'arm64-qemu'
+    });
+  }
+  choices.push(
+    { name: 'All on this x86_64 host', value: 'x86' },
+    { name: 'FreeSWITCH + SBC on a separate x86_64 host (split topology)', value: 'split' }
+  );
+
+  const { topology } = await inquirer.prompt([{
+    type: 'list',
+    name: 'topology',
+    message: 'Deployment topology:',
+    choices,
+    default: isArm64 ? 'arm64-qemu' : (config.deployment?.topology || 'x86')
+  }]);
+
+  config.deployment = config.deployment || {};
+  config.deployment.topology = topology;
+  config.deployment.useQemu = topology === 'arm64-qemu';
+
+  if (topology === 'split') {
+    console.log(chalk.cyan('\nEnter the address of the x86_64 host running FreeSWITCH:'));
+    const splitAnswers = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'freeswitchHost',
+        message: 'Remote FreeSWITCH host IP:',
+        default: config.deployment.freeswitchHost || '',
+        validate: (input) => validateIP(input) ? true : 'Invalid IP address'
+      },
+      {
+        type: 'input',
+        name: 'freeswitchPort',
+        message: 'FreeSWITCH ESL port:',
+        default: String(config.deployment.freeswitchPort || 8021),
+        validate: (input) => {
+          const p = parseInt(input, 10);
+          return (!isNaN(p) && p > 0 && p < 65536) ? true : 'Invalid port';
+        }
+      }
+    ]);
+    config.deployment.freeswitchHost = splitAnswers.freeswitchHost;
+    config.deployment.freeswitchPort = parseInt(splitAnswers.freeswitchPort, 10);
+  }
+
+  if (topology === 'arm64-qemu') {
+    console.log(chalk.cyan('\n→ QEMU binfmt will be installed automatically when starting services.'));
+    console.log(chalk.gray('  (docker run --privileged --rm tonistiigi/binfmt --install amd64)\n'));
+  }
 
   return config;
 }

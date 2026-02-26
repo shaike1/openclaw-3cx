@@ -3,7 +3,7 @@ import ora from 'ora';
 import fs from 'fs';
 import path from 'path';
 import { loadConfig, configExists, getInstallationType } from '../config.js';
-import { checkDocker, writeDockerConfig, startContainers } from '../docker.js';
+import { checkDocker, writeDockerConfig, startContainers, generateDevicesJson } from '../docker.js';
 import { startServer, isServerRunning } from '../process-manager.js';
 import { isClaudeInstalled, sleep } from '../utils.js';
 import { checkClaudeApiServer } from '../network.js';
@@ -119,17 +119,16 @@ async function startVoiceServer(config, isPiMode) {
     process.exit(1);
   }
 
-  // In Pi mode or voice-server mode, check API server reachability
-  const apiServerIp = isPiMode ? config.deployment.pi.macIp : config.deployment.apiServerIp;
-  if (apiServerIp) {
-    const apiServerUrl = `http://${apiServerIp}:${config.server.claudeApiPort}`;
-    const apiSpinner = ora(`Checking API server at ${apiServerUrl}...`).start();
-    const apiHealth = await checkClaudeApiServer(apiServerUrl);
+  // Check OpenClaw reachability if configured
+  const openclawHost = config.deployment?.openclawHost;
+  if (openclawHost) {
+    const openclawUrl = `http://${openclawHost}:${config.deployment.openclawPort || 18790}`;
+    const apiSpinner = ora(`Checking OpenClaw at ${openclawUrl}...`).start();
+    const apiHealth = await checkClaudeApiServer(openclawUrl);
     if (apiHealth.healthy) {
-      apiSpinner.succeed(`API server is healthy at ${apiServerUrl}`);
+      apiSpinner.succeed(`OpenClaw is healthy at ${openclawUrl}`);
     } else {
-      apiSpinner.warn(`API server not responding at ${apiServerUrl}`);
-      console.log(chalk.yellow('  ⚠️  Make sure "claude-phone api-server" is running on your API server\n'));
+      apiSpinner.warn(`OpenClaw not responding at ${openclawUrl} — continuing anyway`);
     }
   }
 
@@ -143,29 +142,23 @@ async function startVoiceServer(config, isPiMode) {
   }
   spinner.succeed('Docker is ready');
 
-  // Generate Docker config
-  spinner.start('Generating Docker configuration...');
+  // Generate Docker config (.env + devices.json)
+  spinner.start('Writing .env and devices.json...');
   try {
     await writeDockerConfig(config);
-
-    // Also write devices.json to voice-app/config
-    const devicesPath = path.join(config.paths.voiceApp, 'config', 'devices.json');
-    const devicesConfig = {};
-    for (const device of config.devices) {
-      devicesConfig[device.extension] = device;
-    }
-    await fs.promises.writeFile(devicesPath, JSON.stringify(devicesConfig, null, 2), { mode: 0o644 });
-
-    spinner.succeed('Docker configuration generated');
+    spinner.succeed('Configuration written');
   } catch (error) {
-    spinner.fail(`Failed to generate config: ${error.message}`);
+    spinner.fail(`Failed to write config: ${error.message}`);
     throw error;
   }
 
-  // Start Docker containers
+  // Start Docker containers (with ARM64 overlay if configured)
+  const startOptions = {
+    useQemu: config.deployment?.useQemu || false
+  };
   spinner.start('Starting Docker containers...');
   try {
-    await startContainers();
+    await startContainers(startOptions);
     spinner.succeed('Docker containers started');
   } catch (error) {
     spinner.fail(`Failed to start containers: ${error.message}`);
@@ -193,8 +186,8 @@ async function startVoiceServer(config, isPiMode) {
   console.log(chalk.bold.green('\n✓ Voice server running!\n'));
   console.log(chalk.gray('Services:'));
   console.log(chalk.gray(`  • Docker containers: drachtio, freeswitch, voice-app`));
-  if (apiServerIp) {
-    console.log(chalk.gray(`  • API server: http://${apiServerIp}:${config.server.claudeApiPort}`));
+  if (openclawHost) {
+    console.log(chalk.gray(`  • OpenClaw: http://${openclawHost}:${config.deployment.openclawPort || 18790}`));
   }
   console.log(chalk.gray(`  • Voice app API: http://localhost:${config.server.httpPort}\n`));
   console.log(chalk.gray('Ready to receive calls on:'));
@@ -218,40 +211,16 @@ async function startBoth(config, isPiMode) {
     process.exit(1);
   }
 
-  // Only check claude-api-server path in standard mode (not Pi mode)
-  if (!isPiMode && !fs.existsSync(config.paths.claudeApiServer)) {
-    console.log(chalk.red(`✗ Claude API server not found at: ${config.paths.claudeApiServer}`));
-    console.log(chalk.gray('  Update paths in configuration\n'));
-    process.exit(1);
-  }
-
-  // Check if dependencies are installed (not in Pi mode)
-  if (!isPiMode) {
-    const nodeModulesPath = path.join(config.paths.claudeApiServer, 'node_modules');
-    if (!fs.existsSync(nodeModulesPath)) {
-      console.log(chalk.red('✗ Dependencies not installed in claude-api-server'));
-      console.log(chalk.yellow('\nRun the following to install dependencies:'));
-      console.log(chalk.cyan(`  cd ${config.paths.claudeApiServer} && npm install\n`));
-      process.exit(1);
-    }
-  }
-
-  // Check Claude CLI only in standard mode (Pi mode connects to API server instead)
-  if (!isPiMode && !(await isClaudeInstalled())) {
-    console.log(chalk.yellow('⚠️  Claude CLI not found'));
-    console.log(chalk.gray('  Install from: https://claude.com/download\n'));
-  }
-
-  // In Pi mode, verify API server is reachable
-  if (isPiMode) {
-    const apiServerUrl = `http://${config.deployment.pi.macIp}:${config.server.claudeApiPort}`;
-    const apiSpinner = ora(`Checking API server at ${apiServerUrl}...`).start();
-    const apiHealth = await checkClaudeApiServer(apiServerUrl);
+  // Check OpenClaw reachability if configured
+  const openclawHost = config.deployment?.openclawHost;
+  if (openclawHost) {
+    const openclawUrl = `http://${openclawHost}:${config.deployment.openclawPort || 18790}`;
+    const apiSpinner = ora(`Checking OpenClaw at ${openclawUrl}...`).start();
+    const apiHealth = await checkClaudeApiServer(openclawUrl);
     if (apiHealth.healthy) {
-      apiSpinner.succeed(`API server is healthy at ${apiServerUrl}`);
+      apiSpinner.succeed(`OpenClaw is healthy at ${openclawUrl}`);
     } else {
-      apiSpinner.warn(`API server not responding at ${apiServerUrl}`);
-      console.log(chalk.yellow('  ⚠️  Make sure "claude-phone api-server" is running on your API server\n'));
+      apiSpinner.warn(`OpenClaw not responding at ${openclawUrl} — continuing anyway`);
     }
   }
 
@@ -265,77 +234,52 @@ async function startBoth(config, isPiMode) {
   }
   spinner.succeed('Docker is ready');
 
-  // Generate Docker config
-  spinner.start('Generating Docker configuration...');
+  // Write .env and devices.json to project root
+  spinner.start('Writing .env and devices.json...');
   try {
     await writeDockerConfig(config);
-
-    // Also write devices.json to voice-app/config
-    const devicesPath = path.join(config.paths.voiceApp, 'config', 'devices.json');
-    const devicesConfig = {};
-    for (const device of config.devices) {
-      devicesConfig[device.extension] = device;
-    }
-    await fs.promises.writeFile(devicesPath, JSON.stringify(devicesConfig, null, 2), { mode: 0o644 });
-
-    spinner.succeed('Docker configuration generated');
+    spinner.succeed('Configuration written');
   } catch (error) {
-    spinner.fail(`Failed to generate config: ${error.message}`);
+    spinner.fail(`Failed to write config: ${error.message}`);
     throw error;
   }
 
-  // Start Docker containers
-  spinner.start('Starting Docker containers...');
+  // Start Docker containers with --profile full (includes SBC + claude-api-server)
+  const startOptions = {
+    useQemu: config.deployment?.useQemu || false,
+    profile: 'full'
+  };
+  spinner.start('Starting Docker containers (full stack)...');
   try {
-    await startContainers();
+    await startContainers(startOptions);
     spinner.succeed('Docker containers started');
   } catch (error) {
     spinner.fail(`Failed to start containers: ${error.message}`);
 
-    // AC25: Detect drachtio port conflict
     if (error.message.includes('port') || error.message.includes('address already in use')) {
       console.log(chalk.yellow('\n⚠️  Port conflict detected\n'));
       console.log(chalk.gray('Possible causes:'));
       console.log(chalk.gray('  • 3CX SBC is running on the configured port'));
       console.log(chalk.gray('  • Another service is using the port'));
       console.log(chalk.gray('\nSuggested fixes:'));
-      console.log(chalk.gray('  1. If 3CX SBC is on port 5060, run "claude-phone setup" again'));
-      console.log(chalk.gray('  2. Check running containers: docker ps'));
-      console.log(chalk.gray('  3. Stop conflicting services: docker compose down\n'));
+      console.log(chalk.gray('  1. Check running containers: docker ps'));
+      console.log(chalk.gray('  2. Stop conflicting services: docker compose down\n'));
     }
 
     throw error;
   }
 
-  // Wait a bit for containers to initialize
+  // Wait for containers to initialize
   spinner.start('Waiting for containers to initialize...');
   await sleep(3000);
   spinner.succeed('Containers initialized');
 
-  // Start claude-api-server (only in standard mode - Pi mode uses remote API server)
-  if (!isPiMode) {
-    spinner.start('Starting Claude API server...');
-    try {
-      if (await isServerRunning()) {
-        spinner.warn('Claude API server already running');
-      } else {
-        await startServer(config.paths.claudeApiServer, config.server.claudeApiPort);
-        spinner.succeed(`Claude API server started on port ${config.server.claudeApiPort}`);
-      }
-    } catch (error) {
-      spinner.fail(`Failed to start server: ${error.message}`);
-      throw error;
-    }
-  }
-
   // Success
   console.log(chalk.bold.green('\n✓ All services running!\n'));
   console.log(chalk.gray('Services:'));
-  console.log(chalk.gray(`  • Docker containers: drachtio, freeswitch, voice-app`));
-  if (isPiMode) {
-    console.log(chalk.gray(`  • API server: http://${config.deployment.pi.macIp}:${config.server.claudeApiPort}`));
-  } else {
-    console.log(chalk.gray(`  • Claude API server: http://localhost:${config.server.claudeApiPort}`));
+  console.log(chalk.gray(`  • drachtio, freeswitch, voice-app, 3cx-sbc, claude-api-server`));
+  if (openclawHost) {
+    console.log(chalk.gray(`  • OpenClaw: http://${openclawHost}:${config.deployment.openclawPort || 18790}`));
   }
   console.log(chalk.gray(`  • Voice app API: http://localhost:${config.server.httpPort}\n`));
   console.log(chalk.gray('Ready to receive calls on:'));
