@@ -440,6 +440,28 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for detailed troubleshoot
 
 ---
 
+
+## Interactive Skill Installer (Claude Code)
+
+Install the Call skill with an interactive wizard:
+
+```bash
+./scripts/install-skill-interactive.sh
+```
+
+The wizard asks for:
+- Voice API base URL
+- Your extension (target for `me`/`myself`)
+- Default caller extension
+- Default device name
+- Default mode (`announce` or `conversation`)
+
+After install, run:
+
+```bash
+~/.claude/skills/Call/bin/call outbound me --message "בדיקה" --mode conversation
+```
+
 ## Full Setup Guide
 
 See [docs/SETUP.md](docs/SETUP.md) for the complete step-by-step guide including 3CX SBC setup,
