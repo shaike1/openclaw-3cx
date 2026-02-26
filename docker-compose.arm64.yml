@@ -17,3 +17,6 @@ services:
 
   sbc:
     platform: linux/amd64
+
+  drachtio:
+    image: drachtio/drachtio-server:0.9.5

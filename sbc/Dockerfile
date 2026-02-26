@@ -2,14 +2,16 @@ FROM debian:bookworm-slim
 
 # Install 3CX SmartSBC from the official 3CX apt repository
 # Only x86_64 (amd64) is supported by 3CX — see ARM64 notes in docs/SETUP.md
+# Use the keyring copied directly from the host (correct 3CX repo key)
+COPY 3cx-archive-keyring.gpg /usr/share/keyrings/3cx-archive-keyring.gpg
 RUN apt-get update && \
-    apt-get install -y curl gnupg --no-install-recommends && \
-    curl -fsSL https://downloads.3cx.com/downloads/misc/3cxsbc.gpg | \
-      gpg --dearmor -o /usr/share/keyrings/3cx-sbc.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/3cx-sbc.gpg] https://downloads.3cx.com/repo sbc main" \
-      > /etc/apt/sources.list.d/3cxsbc.list && \
+    apt-get install -y ca-certificates --no-install-recommends && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/3cx-archive-keyring.gpg] http://repo.3cx.com/3cx bookworm main" \
+      > /etc/apt/sources.list.d/3cx.list && \
     apt-get update && \
+    printf '#!/bin/sh\nexit 0\n' > /usr/bin/systemctl && chmod +x /usr/bin/systemctl && \
     apt-get install -y 3cxsbc --no-install-recommends && \
+    rm /usr/bin/systemctl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # The SBC config is volume-mounted from the host at runtime.
