@@ -1,0 +1,19 @@
+# ARM64 / Raspberry Pi overlay
+#
+# Use this on any ARM64 host (Raspberry Pi, Oracle A1, AWS Graviton, Apple Silicon).
+# It forces x86-only images (FreeSWITCH, SBC) to run via QEMU emulation.
+# All other services (drachtio, voice-app, claude-api-server) run natively.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.arm64.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.arm64.yml --profile full up -d
+#
+# First time on a new ARM host — enable QEMU:
+#   docker run --privileged --rm tonistiigi/binfmt --install amd64
+
+services:
+  freeswitch:
+    platform: linux/amd64
+
+  sbc:
+    platform: linux/amd64

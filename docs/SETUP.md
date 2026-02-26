@@ -315,36 +315,63 @@ MULTI-REGISTRAR <device> SUCCESS - Registered as ext XXXX
 | `3cx-sbc` (3CX SmartSBC) | ⚠️ x86_64 only | No ARM build from 3CX |
 | `gTTS` / `SpeechRecognition` (Python) | ✅ Native | Pure Python, no binaries |
 
-### QEMU workaround (recommended for ARM64)
+### Option A — QEMU emulation (quickest, recommended for low-medium call volume)
 
-Uncomment the `platform:` lines in `docker-compose.yml` for FreeSWITCH and/or the SBC:
+A compose overlay is provided that adds `platform: linux/amd64` to the x86-only services.
+drachtio, voice-app, and claude-api-server run natively. Only FreeSWITCH and the SBC use QEMU.
 
+**Deploy on ARM64:**
+
+```bash
+# One-time: enable QEMU on the ARM host
+docker run --privileged --rm tonistiigi/binfmt --install amd64
+
+# Copy and configure .env
+cp .env.example .env && nano .env
+
+# Copy and configure devices.json
+cp voice-app/config/devices.json.example voice-app/config/devices.json && nano voice-app/config/devices.json
+
+# Provision SBC (first time only)
+./sbc/provision.sh
+
+# Start everything
+./scripts/deploy-arm64.sh --full
+```
+
+Or manually:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.arm64.yml --profile full up -d
+```
+
+**Performance:** FreeSWITCH and SBC are I/O-bound, not CPU-heavy.
+QEMU overhead is acceptable for voice bots — not suitable for high-volume call centers.
+
+### Option B — Native ARM64 FreeSWITCH (production, no QEMU)
+
+Build FreeSWITCH from source for ARM64. Takes 30–60 minutes once:
+
+```bash
+./scripts/build-freeswitch-arm64.sh
+```
+
+After building, update `docker-compose.yml` to use the local image:
 ```yaml
 freeswitch:
-  image: drachtio/drachtio-freeswitch-mrf:latest
-  platform: linux/amd64   # QEMU emulation
-
-sbc:
-  build: ./sbc
-  platform: linux/amd64   # QEMU emulation
+  image: drachtio-freeswitch-mrf:arm64   # local native build
+  # remove platform: line
 ```
 
-This works on Raspberry Pi 4 / Apple Silicon / any ARM64 Linux with Docker.
-Performance overhead is ~20–30% — acceptable for low-to-medium call volume.
-
-### Alternative: Split deployment
-
-Run FreeSWITCH and the SBC on a separate x86_64 machine (even a cheap VPS), and run the voice-app, drachtio, and claude-api-server natively on ARM64. drachtio can connect to a remote FreeSWITCH over ESL.
-
-### Native ARM64 (advanced)
-
-FreeSWITCH compiles on ARM64. To build a native image:
+Then deploy normally without the arm64 overlay:
 ```bash
-git clone https://github.com/drachtio/drachtio-freeswitch-mrf
-cd drachtio-freeswitch-mrf
-docker buildx build --platform linux/arm64 -t drachtio-freeswitch-mrf:arm64 .
+docker compose --profile full up -d
 ```
-This takes 20–40 minutes but produces a fully native image with no QEMU overhead.
+
+### Option C — Split deployment (keep FreeSWITCH on x86)
+
+If you already have an x86 machine running FreeSWITCH, point your ARM deployment at it
+by setting `FREESWITCH_HOST` in `.env` to the x86 machine's IP. drachtio, voice-app,
+and claude-api-server run natively on ARM. Only FreeSWITCH and the SBC stay on x86.
 
 ---
 
