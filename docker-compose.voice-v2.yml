@@ -1,0 +1,105 @@
+version: '3.8'
+
+# OpenClaw-3CX Voice v2 - Zero-downtime POC
+# Phase 1: Parallel stack with improved session isolation and observability
+
+services:
+  # Media/SIP layer (unchanged for now - validates compatibility)
+  drachtio-v2:
+    image: drachtio/drachtio-server:0.9.5
+    container_name: drachtio-v2
+    network_mode: host
+    command: drachtio --contact "sip:*;transport=udp" --external-ip ${SBC_PUBLIC_IP}
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  freeswitch-v2:
+    image: drachtio/drachtio-freeswitch-mrf:latest
+    container_name: freeswitch-v2
+    network_mode: host
+    environment:
+      - MOD_AUDIO_FORK=true
+    volumes:
+      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/custom:ro
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # New: Dedicated voice worker with strict session isolation
+  voice-worker:
+    build:
+      context: ./voice-worker
+      dockerfile: Dockerfile
+    container_name: voice-worker-v2
+    network_mode: host
+    environment:
+      - NODE_ENV=production
+      - DRACHTIO_HOST=127.0.0.1
+      - DRACHTIO_PORT=9022
+      - DRACHTIO_SECRET=${DRACHTIO_SECRET:-cymru}
+      - FREESWITCH_HOST=127.0.0.1
+      - FREESWITCH_PORT=8021
+      - FREESWITCH_SECRET=${FREESWITCH_SECRET:-ClueCon}
+      - CLAUDE_API_URL=http://127.0.0.1:3334
+      - GOOGLE_CLOUD_TTS_KEY_PATH=/app/keys/google-tts-key.json
+      - OPENAI_WHISPER_KEY=${OPENAI_WHISPER_KEY}
+      - BARGE_IN_ENABLED=true
+      - VAD_THRESHOLD=0.5
+      - SESSION_LOCK_RETRY_COUNT=3
+      - SESSION_LOCK_RETRY_DELAY_MS=500
+      - LOG_LEVEL=info
+      - HEALTH_PORT=3100
+    volumes:
+      - ./voice-worker/keys:/app/keys:ro
+      - ./logs/voice-worker:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Enhanced Claude API bridge with per-call sessions
+  claude-api-v2:
+    build:
+      context: ./claude-api-server
+      dockerfile: Dockerfile
+    container_name: claude-api-v2
+    network_mode: host
+    environment:
+      - NODE_ENV=production
+      - PORT=3334
+      - OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      - SESSION_PREFIX=call-
+      - SESSION_CLEANUP_ENABLED=true
+      - SESSION_MAX_AGE_MS=3600000
+      - RETRY_ON_LOCK=true
+      - RETRY_MAX_ATTEMPTS=3
+      - LOG_LEVEL=info
+    volumes:
+      - ./logs/claude-api-v2:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3334/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
