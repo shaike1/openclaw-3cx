@@ -212,3 +212,62 @@ Per call, log these fields:
 - `bc3fbeb` - Call handler, session manager, STT/TTS, metrics
 - `d0b5dfb` - Env template + README instructions
 
+
+---
+
+## Phase 1b Complete (2026-02-27)
+
+### ✅ Completed Tasks
+- [x] **STT/TTS implementations** (commit: 1425705)
+  - [x] Google Cloud TTS integration (Hebrew)
+  - [x] OpenAI Whisper STT integration
+  - [x] Primary + fallback pattern
+  - [x] Error handling and retry logic
+- [x] **Call flow implementation**
+  - [x] Answer calls with greeting
+  - [x] TTS synthesis for responses
+  - [x] Basic Claude API integration
+  - [x] Per-call metrics tracking
+- [x] **Setup automation** (commit: 8abd043)
+  - [x] Environment validation script
+  - [x] Docker build automation
+  - [x] Health check helpers
+
+### 🎯 Phase 1b Features
+- Real TTS: Google Cloud with Hebrew voices (he-IL-Wavenet-A)
+- Real STT: OpenAI Whisper with language detection
+- Session isolation maintained throughout call
+- Metrics collection for all STT/TTS operations
+- Fallback pattern for reliability
+
+### 🧪 Ready for Testing
+```bash
+# Setup
+cp voice-v2.env.example .env
+# Edit .env with your API keys
+./scripts/setup-voice-v2.sh
+
+# Run
+docker-compose -f docker-compose.voice-v2.yml up -d
+
+# Test
+curl http://localhost:3100/health
+curl http://localhost:3100/metrics
+```
+
+### 📊 Exit Criteria Check
+- [ ] 20 test calls completed
+- [ ] 0 critical crashes
+- [ ] STT success rate > 90%
+- [ ] TTS success rate > 95%
+- [ ] No session lock spoken to caller
+
+### 🔄 Latest Commits
+- `1425705` - STT/TTS implementations
+- `8abd043` - Setup script
+
+### 🚀 Next: Phase 2 - Canary Deployment
+- Route specific extension to v2
+- Keep v1 as fallback
+- Monitor for 48h stability
+
