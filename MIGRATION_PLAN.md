@@ -271,3 +271,58 @@ curl http://localhost:3100/metrics
 - Keep v1 as fallback
 - Monitor for 48h stability
 
+
+---
+
+## Phase 2 Ready (2026-02-27)
+
+### 🐤 Canary Deployment Infrastructure
+
+#### ✅ Completed (commit: 9d9304d)
+- [x] Canary compose file (parallel v1 + v2)
+- [x] Enable/disable scripts
+- [x] Monitoring script
+- [x] Canary playbook documentation
+
+#### 📋 Canary Workflow
+
+**Enable:**
+```bash
+./scripts/enable-canary.sh 12699  # Test extension
+```
+
+**Monitor:**
+```bash
+./scripts/monitor-canary.sh
+docker logs -f voice-worker-v2
+```
+
+**Disable (rollback):**
+```bash
+./scripts/disable-canary.sh
+```
+
+#### 🎯 Phase 2 Success Criteria
+- [ ] 48h stable operation
+- [ ] v2 health checks passing
+- [ ] Test calls successful
+- [ ] STT success > 90%, TTS success > 95%
+- [ ] No critical errors
+
+#### 📊 Canary Status Monitoring
+- Health: `curl http://localhost:3100/health`
+- Metrics: `curl http://localhost:3100/metrics`
+- Logs: `docker logs -f voice-worker-v2`
+
+#### 🔄 Rollback Plan
+- Execute `./scripts/disable-canary.sh`
+- All traffic returns to v1 instantly
+- v2 containers stopped cleanly
+
+#### 🚀 Post-Canary (Phase 3)
+After 48h stable:
+1. Review metrics and logs
+2. Make validation calls
+3. If green → full cutover
+4. Keep v1 as warm fallback
+
