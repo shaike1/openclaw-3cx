@@ -133,6 +133,21 @@ docker compose build voice-app && docker compose up -d --force-recreate voice-ap
 
 ---
 
+## Interactive Install Wizard (recommended)
+
+For first-time users (no Linux/Docker experience), use the guided setup:
+
+```bash
+cd openclaw-3cx
+./setup-interactive.sh
+```
+
+What it does:
+- asks all required values step-by-step (3CX + OpenClaw)
+- writes `.env` and `voice-app/config/devices.json` safely
+- offers an immediate config backup (`scripts/backup-config.sh`)
+- can start the stack automatically (ARM64-aware)
+
 ## Device Config
 
 `voice-app/config/devices.json` is **volume-mounted and gitignored** (contains SIP credentials).
