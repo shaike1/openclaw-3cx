@@ -181,3 +181,34 @@ Per call, log these fields:
 - Session prefix: `call-<uuid>` for OpenClaw bridge isolation
 - Retry logic configured (3 attempts, 500ms delay)
 
+
+---
+
+## Phase 1a Complete (2026-02-27)
+
+### ✅ Completed Tasks
+- [x] **voice-worker core modules** (commits: bc3fbeb, d0b5dfb)
+  - [x] Call handler with invite handling
+  - [x] Session manager with retry logic
+  - [x] STT/TTS manager (interface)
+  - [x] Metrics collector (per-call stats)
+  - [x] Health endpoints (/health, /ready, /metrics)
+- [x] Documentation
+  - [x] Environment template (voice-v2.env.example)
+  - [x] README with Phase 1 setup instructions
+
+### 📊 Architecture Highlights
+- **Session isolation**: `call-<uuid>` pattern for each call
+- **Retry logic**: 3 attempts with 500ms delay on 423 lock
+- **Observability**: Structured JSON logs + per-call metrics
+- **Health checks**: HTTP endpoints for monitoring
+
+### 🧪 Phase 1 Status
+- Current: **Rejects calls with 486** (testing mode)
+- Next: Phase 1b - Implement STT/TTS + barge-in
+- Target: 20 test calls, 0 critical crashes
+
+### 🔄 Latest Commits
+- `bc3fbeb` - Call handler, session manager, STT/TTS, metrics
+- `d0b5dfb` - Env template + README instructions
+
