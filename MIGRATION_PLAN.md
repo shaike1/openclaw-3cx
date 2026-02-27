@@ -155,3 +155,29 @@ Per call, log these fields:
 - [ ] Build `docker-compose.voice-v2.yml` skeleton
 - [ ] Add `voice-worker` scaffold with health endpoints
 - [ ] Add canary extension mapping plan
+
+---
+
+## Phase 1 Progress Update (2026-02-27)
+
+### ✅ Completed
+- [x] Created `docker-compose.voice-v2.yml` skeleton
+- [x] Created `voice-worker` service structure
+- [x] Added health endpoints (`/health`, `/ready`)
+- [x] Implemented config management with env vars
+- [x] Added structured logging (Winston, JSON format)
+- [x] Committed to git (commits: 29b0a19, 4b448c2)
+
+### 🔨 Next Steps (In Progress)
+- [ ] Implement call handler with session isolation
+- [ ] Add STT/TTS integration with primary+fallback pattern
+- [ ] Implement barge-in detection
+- [ ] Add per-call metrics collection
+- [ ] Test 20 calls with 0 critical crashes
+
+### 📝 Notes
+- Voice worker currently rejects all calls (486) - placeholder for testing
+- Health checks configured but not yet battle-tested
+- Session prefix: `call-<uuid>` for OpenClaw bridge isolation
+- Retry logic configured (3 attempts, 500ms delay)
+
