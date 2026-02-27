@@ -1,19 +1,44 @@
 const express = require('express');
 const Srf = require('drachtio-srf');
+const CallHandler = require('./call-handler');
+const SessionManager = require('./session-manager');
+const SttTtsManager = require('./stt-tts-manager');
+const MetricsCollector = require('./metrics');
 const logger = require('./logger');
 const config = require('./config');
 
 const app = express();
 const srf = new Srf();
 
+// Initialize managers
+const sessionManager = new SessionManager();
+const sttTtsManager = new SttTtsManager();
+const metrics = new MetricsCollector();
+
 // Health endpoints
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
 });
 
 app.get('/ready', (req, res) => {
   const ready = srf.isConnected;
-  res.status(ready ? 200 : 503).json({ ready, timestamp: new Date().toISOString() });
+  res.status(ready ? 200 : 503).json({
+    ready,
+    timestamp: new Date().toISOString(),
+    drachtioConnected: ready
+  });
+});
+
+// Metrics endpoint
+app.get('/metrics', (req, res) => {
+  res.json({
+    timestamp: new Date().toISOString(),
+    stats: metrics.getStats()
+  });
 });
 
 // Start health server
@@ -29,27 +54,30 @@ srf.connect({
 });
 
 srf.on('connect', (err, hostport) => {
-  logger.info(`Connected to Drachtio at ${hostport}`);
+  if (err) {
+    logger.error('Failed to connect to Drachtio', { error: err.message });
+  } else {
+    logger.info(`Connected to Drachtio at ${hostport}`);
+  }
 });
 
 srf.on('error', (err) => {
-  logger.error('Drachtio connection error:', err);
+  logger.error('Drachtio error', { error: err.message });
 });
 
-// Inbound call handler (placeholder for Phase 1)
+// Create call handler
+const callHandler = new CallHandler(srf);
+
+// Inbound call handler
 srf.invite((req, res) => {
-  const callId = req.get('Call-ID');
-  const from = req.getParsedHeader('From').uri;
-  const to = req.getParsedHeader('To').uri;
-  
-  logger.info('Inbound call', { callId, from, to });
-  
-  // Phase 1: Just log and reject for now
-  res.send(486, 'Busy Here - v2 POC not yet handling calls');
+  callHandler.handleInvite(req, res);
 });
 
 logger.info('Voice worker v2 started', {
+  version: '2.0.0',
   drachtioHost: config.drachtio.host,
   drachtioPort: config.drachtio.port,
-  healthPort: config.healthPort
+  healthPort: config.healthPort,
+  bargeInEnabled: config.bargeIn.enabled,
+  vadThreshold: config.bargeIn.vadThreshold
 });
