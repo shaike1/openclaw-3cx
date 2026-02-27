@@ -15,6 +15,6 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  \"author\": \"shaike1\",
+  "author": "shaike1",
   "license": "MIT"
 }
