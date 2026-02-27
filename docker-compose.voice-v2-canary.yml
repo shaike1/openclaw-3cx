@@ -1,0 +1,66 @@
+version: '3.8'
+
+# Phase 2: Canary deployment
+# Runs v2 in parallel with v1, routes only test extension
+
+services:
+  # Original v1 stack (unchanged)
+  voice-app:
+    image: voice-app:latest
+    container_name: voice-app-v1
+    network_mode: host
+    restart: unless-stopped
+
+  claude-api-server:
+    image: claude-api-server:latest
+    container_name: claude-api-v1
+    network_mode: host
+    restart: unless-stopped
+
+  # New v2 stack (canary)
+  voice-worker:
+    build:
+      context: ./voice-worker
+      dockerfile: Dockerfile
+    container_name: voice-worker-v2
+    network_mode: host
+    environment:
+      - NODE_ENV=production
+      - DRACHTIO_HOST=127.0.0.1
+      - DRACHTIO_PORT=9022
+      - DRACHTIO_SECRET=${DRACHTIO_SECRET:-cymru}
+      - CLAUDE_API_URL=http://127.0.0.1:3334
+      - GOOGLE_CLOUD_TTS_KEY_PATH=/app/keys/google-tts-key.json
+      - OPENAI_WHISPER_KEY=${OPENAI_WHISPER_KEY}
+      - BARGE_IN_ENABLED=false
+      - HEALTH_PORT=3100
+    volumes:
+      - ./voice-worker/keys:/app/keys:ro
+      - ./logs/voice-worker:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - canary
+
+  claude-api-v2:
+    build:
+      context: ./claude-api-server
+      dockerfile: Dockerfile
+    container_name: claude-api-v2
+    network_mode: host
+    environment:
+      - NODE_ENV=production
+      - PORT=3334
+      - OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      - SESSION_PREFIX=call-
+      - RETRY_ON_LOCK=true
+    volumes:
+      - ./logs/claude-api-v2:/app/logs
+    restart: unless-stopped
+    profiles:
+      - canary
