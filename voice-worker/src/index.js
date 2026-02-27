@@ -14,6 +14,7 @@ const srf = new Srf();
 const sessionManager = new SessionManager();
 const sttTtsManager = new SttTtsManager();
 const metrics = new MetricsCollector();
+const callHandler = new CallHandler(srf, sessionManager, sttTtsManager, metrics);
 
 // Health endpoints
 app.get('/health', (req, res) => {
@@ -65,9 +66,6 @@ srf.on('error', (err) => {
   logger.error('Drachtio error', { error: err.message });
 });
 
-// Create call handler
-const callHandler = new CallHandler(srf);
-
 // Inbound call handler
 srf.invite((req, res) => {
   callHandler.handleInvite(req, res);
@@ -75,6 +73,7 @@ srf.invite((req, res) => {
 
 logger.info('Voice worker v2 started', {
   version: '2.0.0',
+  phase: '1b',
   drachtioHost: config.drachtio.host,
   drachtioPort: config.drachtio.port,
   healthPort: config.healthPort,
