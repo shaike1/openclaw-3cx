@@ -51,7 +51,7 @@ services:
   # ARM64: ✅ official multi-arch image
   # ─────────────────────────────────────────
   drachtio:
-    image: drachtio/drachtio-server:latest
+    image: drachtio/drachtio-server:0.9.5
     container_name: drachtio
     restart: unless-stopped
     network_mode: host

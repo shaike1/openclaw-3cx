@@ -133,18 +133,33 @@ router.post('/outbound-call', async function(req, res) {
 
     // Look up device configuration
     var deviceConfig = null;
-    if (deviceParam && deviceRegistry) {
-      // Use get() which tries extension first, then name (case-insensitive)
-      deviceConfig = deviceRegistry.get(deviceParam);
+    if (deviceRegistry) {
+      if (deviceParam) {
+        // Use get() which tries extension first, then name (case-insensitive)
+        deviceConfig = deviceRegistry.get(deviceParam);
 
-      if (deviceConfig) {
-        logger.info('Device found for outbound call', {
-          device: deviceConfig.name,
-          extension: deviceConfig.extension,
-          voiceId: deviceConfig.voiceId || 'default'
-        });
-      } else {
-        logger.warn('Device not found, using default', { requested: deviceParam });
+        if (deviceConfig) {
+          logger.info('Device found for outbound call', {
+            device: deviceConfig.name,
+            extension: deviceConfig.extension,
+            voiceId: deviceConfig.voiceId || 'default'
+          });
+        } else {
+          logger.warn('Device not found, falling back to default device', { requested: deviceParam });
+        }
+      }
+
+      // If no device specified (or lookup failed), pick first configured device
+      if (!deviceConfig) {
+        var all = deviceRegistry.getAllDevices();
+        var keys = Object.keys(all || {});
+        if (keys.length > 0) {
+          deviceConfig = all[keys[0]];
+          logger.info('Using default device for outbound call', {
+            device: deviceConfig.name,
+            extension: deviceConfig.extension
+          });
+        }
       }
     }
 
