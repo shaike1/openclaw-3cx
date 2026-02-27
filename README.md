@@ -487,3 +487,49 @@ Google Cloud API key creation, ARM64 deployment, and the full OpenClaw plugin se
 ## License
 
 MIT
+
+---
+
+## Voice v2 Migration (Phase 1 POC)
+
+### Quick Start (Testing Only)
+```bash
+# Build and start v2 stack
+cp voice-v2.env.example .env
+# Edit .env with your values
+docker-compose -f docker-compose.voice-v2.yml up -d
+
+# Check health
+curl http://localhost:3100/health
+curl http://localhost:3100/ready
+curl http://localhost:3100/metrics
+
+# View logs
+docker logs -f voice-worker-v2
+```
+
+### Phase 1a Components
+- **voice-worker**: Dedicated call processing with:
+  - Session isolation (unique `call-<uuid>` per call)
+  - Health checks (`/health`, `/ready`, `/metrics`)
+  - Structured logging (JSON)
+  - Per-call metrics collection
+
+### Testing Phase 1
+```bash
+# Test health endpoint
+curl http://localhost:3100/health
+
+# Test metrics
+curl http://localhost:3100/metrics
+
+# Inbound calls will return 486 (Busy) - expected for Phase 1 POC
+```
+
+### Next Steps (Phase 1b)
+- [ ] Implement Google Cloud TTS integration
+- [ ] Implement OpenAI Whisper STT integration
+- [ ] Add barge-in detection with VAD
+- [ ] Connect to Claude API for conversation mode
+- [ ] Run 20 test calls with 0 crashes
+
