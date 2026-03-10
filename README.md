@@ -108,6 +108,36 @@ For full setup steps see [docs/SETUP.md](docs/SETUP.md).
 
 ---
 
+## Current Status
+
+### Verified working
+
+The current stack has been validated end-to-end on a live deployment:
+
+- ✅ Outbound announce calls
+- ✅ Call answer detection
+- ✅ Google Cloud TTS playback
+- ✅ Active call status tracking
+- ✅ `GET /api/call/:callId`
+- ✅ `GET /api/calls`
+- ✅ Conversation mode (two-way voice)
+- ✅ Speech capture + STT transcription
+- ✅ AI response spoken back to the caller
+
+### Recent fixes now included
+
+- Fixed outbound session tracking so `callId` is stored correctly in active session state
+- Fixed `GET /api/call/:callId` response shape to return fields at top level
+- Hardened the conversation bridge so backend/model error payloads are not spoken aloud to the caller
+- Added friendlier fallback replies when the AI backend has a temporary failure
+
+### Known minor issue
+
+- Hold music may log `File Not Found` during conversation mode on some deployments.
+  This does not block the conversation flow, but should be cleaned up later.
+
+---
+
 ## Docker Compose Profiles
 
 The `docker-compose.yml` has two modes:

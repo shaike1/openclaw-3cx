@@ -8,7 +8,7 @@ const { setTimeout: sleep } = require('node:timers/promises');
 // Audio cue URLs
 const READY_BEEP_URL = 'http://127.0.0.1:3000/static/ready-beep.wav';
 const GOTIT_BEEP_URL = 'http://127.0.0.1:3000/static/gotit-beep.wav';
-const HOLD_MUSIC_URL = 'http://127.0.0.1:3000/static/hold-music.mp3';
+const HOLD_MUSIC_URL = 'http://127.0.0.1:3000/static/hold-music.wav';
 
 // Default voice ID (Morpheus)
 const DEFAULT_VOICE_ID = 'JAgnJveGGUh4qy4kh6dF';

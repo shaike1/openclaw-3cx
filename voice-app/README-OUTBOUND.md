@@ -102,6 +102,22 @@ Manually hang up an active call.
 }
 ```
 
+### POST /api/v1/calls/cleanup
+
+Cleanup stale calls that are stuck in `PLAYING` beyond the allowed threshold.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "checked": 3,
+  "requestedHangup": 1,
+  "cleanedCallIds": ["abc123-uuid"],
+  "skipped": 2
+}
+```
+
 ## Call States
 
 | State | Description |
@@ -109,8 +125,10 @@ Manually hang up an active call.
 | `queued` | Call created, not yet dialing |
 | `dialing` | SIP INVITE sent, waiting for answer |
 | `playing` | Call answered, playing message |
+| `conversing` | Call answered and running two-way conversation mode |
 | `completed` | Call finished successfully |
 | `failed` | Call failed (busy, no answer, error) |
+| `STALE_PLAYING` | Call appears stuck in playing state and may need cleanup |
 
 ## Call Modes
 
@@ -141,6 +159,12 @@ curl -X POST http://localhost:3000/api/outbound-call \
     "device": "Morpheus"
   }'
 ```
+
+**Current status:** Conversation mode has been validated in a live call with:
+- speech capture working
+- STT transcription working
+- AI response returned and spoken back
+- hardened fallback handling if the upstream AI backend returns an error payload
 
 ## Webhooks
 
