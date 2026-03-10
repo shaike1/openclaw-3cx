@@ -6,6 +6,7 @@
  */
 
 const express = require('express');
+const axios = require('axios');
 const router = express.Router();
 const logger = require('./logger');
 const { OutboundSession, getSession, getAllSessions } = require('./outbound-session');
@@ -21,6 +22,18 @@ var whisperClient = null;
 var claudeBridge = null;
 var ttsService = null;
 var wsPort = 3001;
+
+// v2 rollout router (percentage-based)
+const V2_ROLLOUT_PERCENT = Number(process.env.V2_ROLLOUT_PERCENT || 100);
+const V2_ROUTER_URL = process.env.V2_ROUTER_URL || 'http://127.0.0.1:8080/api/v1/outbound-call';
+
+function shouldRouteToV2(req) {
+  // avoid loops when v2 forwards back to v1
+  if (req.headers['x-rollout-bypass'] === '1') return false;
+  if (!Number.isFinite(V2_ROLLOUT_PERCENT) || V2_ROLLOUT_PERCENT <= 0) return false;
+  if (V2_ROLLOUT_PERCENT >= 100) return true;
+  return (Math.random() * 100) < V2_ROLLOUT_PERCENT;
+}
 
 /**
  * Validate phone number format
@@ -130,6 +143,48 @@ router.post('/outbound-call', async function(req, res) {
     var callerId = req.body.callerId;
     var timeoutSeconds = req.body.timeoutSeconds || 30;
     var webhookUrl = req.body.webhookUrl;
+
+    // v2 percentage rollout router (safe fallback to v1)
+    if (shouldRouteToV2(req)) {
+      try {
+        logger.info('Routing outbound-call to v2', {
+          to: to,
+          mode: mode,
+          rolloutPercent: V2_ROLLOUT_PERCENT,
+          v2Url: V2_ROUTER_URL
+        });
+
+        const v2Resp = await axios.post(V2_ROUTER_URL, {
+          to: to,
+          message: message,
+          mode: mode,
+          device: deviceParam,
+          callerId: callerId,
+          timeoutSeconds: timeoutSeconds,
+          webhookUrl: webhookUrl
+        }, {
+          timeout: timeoutSeconds * 1000,
+          headers: {
+            'Content-Type': 'application/json',
+            // tells v1 (when called from v2 facade) not to re-enter rollout router
+            'X-Rollout-Bypass': '1',
+            'X-Rollout-Origin': 'v1-router'
+          }
+        });
+
+        return res.json(Object.assign({}, v2Resp.data, {
+          routedTo: 'v2',
+          rolloutPercent: V2_ROLLOUT_PERCENT
+        }));
+      } catch (routeErr) {
+        logger.warn('v2 routing failed, falling back to v1', {
+          error: routeErr.message,
+          to: to,
+          mode: mode
+        });
+        // continue to v1 path below
+      }
+    }
 
     // Look up device configuration
     var deviceConfig = null;
@@ -335,10 +390,9 @@ router.get('/call/:callId', function(req, res) {
     });
   }
 
-  res.json({
-    success: true,
-    data: session.getInfo()
-  });
+  res.json(Object.assign({
+    success: true
+  }, session.getInfo()));
 });
 
 /**
